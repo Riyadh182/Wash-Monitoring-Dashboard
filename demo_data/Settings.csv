@@ -1,0 +1,8 @@
+Key,Value
+Run_Hours,24.0
+Day_Start_Hour,8.0
+Plan_Basis,1.0
+Target_Pct,0.95
+Alert_Pct,0.8
+Max_Defect_Pct,0.03
+Max_Rewash_Pct,0.02
