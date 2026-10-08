@@ -1,0 +1,16 @@
+Unit,Process,Machines,Capacity_per_day,Active
+CWL-1,Laser Whisker,1,744,Y
+CWL-1,Laser Mark Destroy,1,2296,Y
+CWL-1,Pattern Whisker,30,29052,Y
+CWL-1,Hand Sand (Front & Back),25,23214,Y
+CWL-1,Allover Hand Sand,5,2410,Y
+CWL-1,Tagging,6,19281,Y
+CWL-1,Grinding,6,7957,Y
+CWL-1,Destruction,5,5257,Y
+CWL-1,Cutting / Destroy,4,8371,Y
+CWL-1,Air Blowing,6,9659,Y
+CWL-1,PP Spray (Front & Back),6,26637,Y
+CWL-1,Allover PP Spray,4,8290,Y
+CWL-1,PP Rubbing,4,4903,Y
+CWL-1,Machine 3D,7,7342,Y
+CWL-1,Iron 3D,3,6387,Y

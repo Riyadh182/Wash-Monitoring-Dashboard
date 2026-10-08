@@ -1,0 +1,720 @@
+{
+ "units": {
+  "CWL-1": {
+   "fl": 37,
+   "ab": 4,
+   "bl": 12,
+   "wash_cap_day": 40864,
+   "dry_cap_day": 16000,
+   "wash_mix": {
+    "Denim": 0.6399765074393109,
+    "Acid": 0.14445477682067345,
+    "Dyeing": 0.09010375880971026,
+    "Twill": 0.1254649569303054
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 744
+    },
+    "Laser Mark Destroy": {
+     "machines": 1,
+     "capacity_day": 2296
+    },
+    "Pattern Whisker": {
+     "machines": 30,
+     "capacity_day": 29052
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 25,
+     "capacity_day": 23214
+    },
+    "Allover Hand Sand": {
+     "machines": 5,
+     "capacity_day": 2410
+    },
+    "Tagging": {
+     "machines": 6,
+     "capacity_day": 19281
+    },
+    "Grinding": {
+     "machines": 6,
+     "capacity_day": 7957
+    },
+    "Destruction": {
+     "machines": 5,
+     "capacity_day": 5257
+    },
+    "Cutting / Destroy": {
+     "machines": 4,
+     "capacity_day": 8371
+    },
+    "Air Blowing": {
+     "machines": 6,
+     "capacity_day": 9659
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 6,
+     "capacity_day": 26637
+    },
+    "Allover PP Spray": {
+     "machines": 4,
+     "capacity_day": 8290
+    },
+    "PP Rubbing": {
+     "machines": 4,
+     "capacity_day": 4903
+    },
+    "Machine 3D": {
+     "machines": 7,
+     "capacity_day": 7342
+    },
+    "Iron 3D": {
+     "machines": 3,
+     "capacity_day": 6387
+    }
+   },
+   "dry_verified": true
+  },
+  "CWL-2": {
+   "fl": 23,
+   "ab": 4,
+   "bl": 14,
+   "wash_cap_day": 37146,
+   "dry_cap_day": 17000,
+   "wash_mix": {
+    "Denim": 0.6750121143595542,
+    "Acid": 0.09739945081570021,
+    "Dyeing": 0.059252678619501425,
+    "Twill": 0.16833575620524416
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 1564
+    },
+    "Laser Mark Destroy": {
+     "machines": 3,
+     "capacity_day": 9485
+    },
+    "Pattern Whisker": {
+     "machines": 20,
+     "capacity_day": 23127
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 23,
+     "capacity_day": 27755
+    },
+    "Allover Hand Sand": {
+     "machines": 2,
+     "capacity_day": 964
+    },
+    "Tagging": {
+     "machines": 5,
+     "capacity_day": 12257
+    },
+    "Grinding": {
+     "machines": 8,
+     "capacity_day": 17032
+    },
+    "Destruction": {
+     "machines": 8,
+     "capacity_day": 10260
+    },
+    "Cutting / Destroy": {
+     "machines": 6,
+     "capacity_day": 11095
+    },
+    "Air Blowing": {
+     "machines": 7,
+     "capacity_day": 14578
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 6,
+     "capacity_day": 27887
+    },
+    "Allover PP Spray": {
+     "machines": 4,
+     "capacity_day": 9613
+    },
+    "PP Rubbing": {
+     "machines": 6,
+     "capacity_day": 5720
+    },
+    "Machine 3D": {
+     "machines": 4,
+     "capacity_day": 4882
+    },
+    "Iron 3D": {
+     "machines": 5,
+     "capacity_day": 10725
+    }
+   },
+   "dry_verified": true
+  },
+  "CWL-3": {
+   "fl": 22,
+   "ab": 4,
+   "bl": 14,
+   "wash_cap_day": 26194,
+   "dry_cap_day": 18000,
+   "wash_mix": {
+    "Denim": 0.5962052378407269,
+    "Acid": 0.20054210887989615,
+    "Dyeing": 0.042986943574864475,
+    "Twill": 0.16026570970451248
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 1333
+    },
+    "Laser Mark Destroy": {
+     "machines": 2,
+     "capacity_day": 3429
+    },
+    "Pattern Whisker": {
+     "machines": 22,
+     "capacity_day": 16731
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 20,
+     "capacity_day": 16644
+    },
+    "Allover Hand Sand": {
+     "machines": 4,
+     "capacity_day": 1544
+    },
+    "Tagging": {
+     "machines": 7,
+     "capacity_day": 10996
+    },
+    "Grinding": {
+     "machines": 6,
+     "capacity_day": 9996
+    },
+    "Destruction": {
+     "machines": 3,
+     "capacity_day": 4423
+    },
+    "Cutting / Destroy": {
+     "machines": 6,
+     "capacity_day": 6263
+    },
+    "Air Blowing": {
+     "machines": 6,
+     "capacity_day": 7483
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 4,
+     "capacity_day": 12479
+    },
+    "Allover PP Spray": {
+     "machines": 3,
+     "capacity_day": 5062
+    },
+    "PP Rubbing": {
+     "machines": 6,
+     "capacity_day": 4988
+    },
+    "Machine 3D": {
+     "machines": 5,
+     "capacity_day": 7526
+    },
+    "Iron 3D": {
+     "machines": 2,
+     "capacity_day": 4290
+    }
+   },
+   "dry_verified": true
+  },
+  "CWL-4": {
+   "fl": 28,
+   "ab": 4,
+   "bl": 10,
+   "wash_cap_day": 32317,
+   "dry_cap_day": 14000,
+   "wash_mix": {
+    "Denim": 0.5811492403379026,
+    "Acid": 0.15196336293591609,
+    "Dyeing": 0.12253612649689018,
+    "Twill": 0.1443512702292911
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 2560
+    },
+    "Laser Mark Destroy": {
+     "machines": 2,
+     "capacity_day": 7559
+    },
+    "Pattern Whisker": {
+     "machines": 22,
+     "capacity_day": 25235
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 20,
+     "capacity_day": 27290
+    },
+    "Allover Hand Sand": {
+     "machines": 4,
+     "capacity_day": 1793
+    },
+    "Tagging": {
+     "machines": 7,
+     "capacity_day": 16564
+    },
+    "Grinding": {
+     "machines": 6,
+     "capacity_day": 11614
+    },
+    "Destruction": {
+     "machines": 3,
+     "capacity_day": 9266
+    },
+    "Cutting / Destroy": {
+     "machines": 6,
+     "capacity_day": 5784
+    },
+    "Air Blowing": {
+     "machines": 6,
+     "capacity_day": 9394
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 4,
+     "capacity_day": 30000
+    },
+    "Allover PP Spray": {
+     "machines": 3,
+     "capacity_day": 3460
+    },
+    "PP Rubbing": {
+     "machines": 6,
+     "capacity_day": 5032
+    },
+    "Machine 3D": {
+     "machines": 5,
+     "capacity_day": 13328
+    },
+    "Iron 3D": {
+     "machines": 2,
+     "capacity_day": 1532
+    }
+   },
+   "dry_verified": true
+  },
+  "SWDL": {
+   "fl": 32,
+   "ab": 2,
+   "bl": 10,
+   "wash_cap_day": 34402,
+   "dry_cap_day": 16000,
+   "wash_mix": {
+    "Denim": 0.6130457531538864,
+    "Acid": 0.13255043311435383,
+    "Dyeing": 0.0681646415906052,
+    "Twill": 0.1862391721411546
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 3,
+     "capacity_day": 2349
+    },
+    "Laser Mark Destroy": {
+     "machines": 1,
+     "capacity_day": 1138
+    },
+    "Pattern Whisker": {
+     "machines": 16,
+     "capacity_day": 11753
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 22,
+     "capacity_day": 19009
+    },
+    "Allover Hand Sand": {
+     "machines": 2,
+     "capacity_day": 964
+    },
+    "Tagging": {
+     "machines": 6,
+     "capacity_day": 16291
+    },
+    "Grinding": {
+     "machines": 10,
+     "capacity_day": 21912
+    },
+    "Destruction": {
+     "machines": 2,
+     "capacity_day": 2167
+    },
+    "Cutting / Destroy": {
+     "machines": 2,
+     "capacity_day": 3281
+    },
+    "Air Blowing": {
+     "machines": 2,
+     "capacity_day": 3064
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 4,
+     "capacity_day": 15777
+    },
+    "Allover PP Spray": {
+     "machines": 1,
+     "capacity_day": 2813
+    },
+    "PP Rubbing": {
+     "machines": 1,
+     "capacity_day": 1744
+    },
+    "Machine 3D": {
+     "machines": 6,
+     "capacity_day": 7323
+    },
+    "Iron 3D": {
+     "machines": 6,
+     "capacity_day": 9226
+    }
+   },
+   "dry_verified": true
+  },
+  "BWL-1": {
+   "fl": 57,
+   "ab": 7,
+   "bl": 13,
+   "wash_cap_day": 40428,
+   "dry_cap_day": 25000,
+   "wash_mix": {
+    "Denim": 0.5594142673394676,
+    "Acid": 0.20804887701592956,
+    "Dyeing": 0.13060255268625706,
+    "Twill": 0.1019343029583457
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 744
+    },
+    "Laser Mark Destroy": {
+     "machines": 1,
+     "capacity_day": 2296
+    },
+    "Pattern Whisker": {
+     "machines": 30,
+     "capacity_day": 29052
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 25,
+     "capacity_day": 23214
+    },
+    "Allover Hand Sand": {
+     "machines": 5,
+     "capacity_day": 2410
+    },
+    "Tagging": {
+     "machines": 6,
+     "capacity_day": 19281
+    },
+    "Grinding": {
+     "machines": 6,
+     "capacity_day": 7957
+    },
+    "Destruction": {
+     "machines": 5,
+     "capacity_day": 5257
+    },
+    "Cutting / Destroy": {
+     "machines": 4,
+     "capacity_day": 8371
+    },
+    "Air Blowing": {
+     "machines": 6,
+     "capacity_day": 9659
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 6,
+     "capacity_day": 26637
+    },
+    "Allover PP Spray": {
+     "machines": 4,
+     "capacity_day": 8290
+    },
+    "PP Rubbing": {
+     "machines": 4,
+     "capacity_day": 4903
+    },
+    "Machine 3D": {
+     "machines": 7,
+     "capacity_day": 7342
+    },
+    "Iron 3D": {
+     "machines": 3,
+     "capacity_day": 6387
+    }
+   },
+   "dry_verified": false
+  },
+  "BWL-2": {
+   "fl": 42,
+   "ab": 5,
+   "bl": 12,
+   "wash_cap_day": 34263,
+   "dry_cap_day": 22000,
+   "wash_mix": {
+    "Denim": 0.6248431252371363,
+    "Acid": 0.15909289904561771,
+    "Dyeing": 0.0783936024282754,
+    "Twill": 0.1376703732889706
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 1564
+    },
+    "Laser Mark Destroy": {
+     "machines": 3,
+     "capacity_day": 9485
+    },
+    "Pattern Whisker": {
+     "machines": 20,
+     "capacity_day": 23127
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 23,
+     "capacity_day": 27755
+    },
+    "Allover Hand Sand": {
+     "machines": 2,
+     "capacity_day": 964
+    },
+    "Tagging": {
+     "machines": 5,
+     "capacity_day": 12257
+    },
+    "Grinding": {
+     "machines": 8,
+     "capacity_day": 17032
+    },
+    "Destruction": {
+     "machines": 8,
+     "capacity_day": 10260
+    },
+    "Cutting / Destroy": {
+     "machines": 6,
+     "capacity_day": 11095
+    },
+    "Air Blowing": {
+     "machines": 7,
+     "capacity_day": 14578
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 6,
+     "capacity_day": 27887
+    },
+    "Allover PP Spray": {
+     "machines": 4,
+     "capacity_day": 9613
+    },
+    "PP Rubbing": {
+     "machines": 6,
+     "capacity_day": 5720
+    },
+    "Machine 3D": {
+     "machines": 4,
+     "capacity_day": 4882
+    },
+    "Iron 3D": {
+     "machines": 5,
+     "capacity_day": 10725
+    }
+   },
+   "dry_verified": false
+  },
+  "EWDL": {
+   "fl": 63,
+   "ab": 6,
+   "bl": 24,
+   "wash_cap_day": 75935,
+   "dry_cap_day": 38000,
+   "wash_mix": {
+    "Denim": 0.328,
+    "Acid": 0.237,
+    "Dyeing": 0.141,
+    "Twill": 0.294
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 1333
+    },
+    "Laser Mark Destroy": {
+     "machines": 2,
+     "capacity_day": 3429
+    },
+    "Pattern Whisker": {
+     "machines": 22,
+     "capacity_day": 16731
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 20,
+     "capacity_day": 16644
+    },
+    "Allover Hand Sand": {
+     "machines": 4,
+     "capacity_day": 1544
+    },
+    "Tagging": {
+     "machines": 7,
+     "capacity_day": 10996
+    },
+    "Grinding": {
+     "machines": 6,
+     "capacity_day": 9996
+    },
+    "Destruction": {
+     "machines": 3,
+     "capacity_day": 4423
+    },
+    "Cutting / Destroy": {
+     "machines": 6,
+     "capacity_day": 6263
+    },
+    "Air Blowing": {
+     "machines": 6,
+     "capacity_day": 7483
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 4,
+     "capacity_day": 12479
+    },
+    "Allover PP Spray": {
+     "machines": 3,
+     "capacity_day": 5062
+    },
+    "PP Rubbing": {
+     "machines": 6,
+     "capacity_day": 4988
+    },
+    "Machine 3D": {
+     "machines": 5,
+     "capacity_day": 7526
+    },
+    "Iron 3D": {
+     "machines": 2,
+     "capacity_day": 4290
+    }
+   },
+   "dry_verified": false
+  },
+  "SZWDL": {
+   "fl": 70,
+   "ab": 4,
+   "bl": 7,
+   "wash_cap_day": 75500,
+   "dry_cap_day": 42500,
+   "wash_mix": {
+    "Denim": 0.5364238410596026,
+    "Acid": 0.1986754966887417,
+    "Dyeing": 0.10596026490066225,
+    "Twill": 0.15894039735099338
+   },
+   "dry_processes": {
+    "Laser Whisker": {
+     "machines": 1,
+     "capacity_day": 2560
+    },
+    "Laser Mark Destroy": {
+     "machines": 2,
+     "capacity_day": 7559
+    },
+    "Pattern Whisker": {
+     "machines": 22,
+     "capacity_day": 25235
+    },
+    "Hand Sand (Front & Back)": {
+     "machines": 20,
+     "capacity_day": 27290
+    },
+    "Allover Hand Sand": {
+     "machines": 4,
+     "capacity_day": 1793
+    },
+    "Tagging": {
+     "machines": 7,
+     "capacity_day": 16564
+    },
+    "Grinding": {
+     "machines": 6,
+     "capacity_day": 11614
+    },
+    "Destruction": {
+     "machines": 3,
+     "capacity_day": 9266
+    },
+    "Cutting / Destroy": {
+     "machines": 6,
+     "capacity_day": 5784
+    },
+    "Air Blowing": {
+     "machines": 6,
+     "capacity_day": 9394
+    },
+    "PP Spray (Front & Back)": {
+     "machines": 4,
+     "capacity_day": 30000
+    },
+    "Allover PP Spray": {
+     "machines": 3,
+     "capacity_day": 3460
+    },
+    "PP Rubbing": {
+     "machines": 6,
+     "capacity_day": 5032
+    },
+    "Machine 3D": {
+     "machines": 5,
+     "capacity_day": 13328
+    },
+    "Iron 3D": {
+     "machines": 2,
+     "capacity_day": 1532
+    }
+   },
+   "dry_verified": false
+  },
+  "NWL": {
+   "fl": 39,
+   "ab": 5,
+   "bl": 7,
+   "wash_cap_day": 38844,
+   "dry_cap_day": 15500,
+   "wash_mix": {
+    "Denim": 0.39877458552157347,
+    "Acid": 0.13518175265163218,
+    "Dyeing": 0.10194624652455977,
+    "Twill": 0.3640974153022346
+   },
+   "dry_processes": {},
+   "dry_verified": false
+  }
+ },
+ "dry_process_names": [
+  "Laser Whisker",
+  "Laser Mark Destroy",
+  "Pattern Whisker",
+  "Hand Sand (Front & Back)",
+  "Allover Hand Sand",
+  "Tagging",
+  "Grinding",
+  "Destruction",
+  "Cutting / Destroy",
+  "Air Blowing",
+  "PP Spray (Front & Back)",
+  "Allover PP Spray",
+  "PP Rubbing",
+  "Machine 3D",
+  "Iron 3D"
+ ]
+}
