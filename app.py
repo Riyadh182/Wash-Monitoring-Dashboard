@@ -185,6 +185,8 @@ with st.sidebar:
 
 D = data.load_all(use_demo)
 S = D['settings']
+if D.get('error'):
+    st.warning('Could not read your Google Sheet, showing DEMO data instead. Check: Sheet shared as "Anyone with the link", Sheet ID correct, tab names exact. Details: ' + D['error'])
 wash, dry, wip, mm, mp = D['wash'], D['dry'], D['wip'], D['machine'], D['process']
 RUN_H, BASIS, DAY_START = S['Run_Hours'], S['Plan_Basis'], S['Day_Start_Hour']
 LABELS = calc.hour_labels(DAY_START)
