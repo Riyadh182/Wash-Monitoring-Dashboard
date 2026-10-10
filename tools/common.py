@@ -27,4 +27,4 @@ def processes_for(unit):
             for p, v in u['dry_processes'].items()]
 
 DEFAULT_SETTINGS = [('Run_Hours', 24), ('Day_Start_Hour', 8), ('Plan_Basis', 1.0), ('Target_Pct', 0.95), ('Alert_Pct', 0.80),
-                    ('Max_Defect_Pct', 0.03), ('Max_Rewash_Pct', 0.02)]
+                    ('Max_Defect_Pct', 0.03), ('Max_Rewash_Pct', 0.02), ('Output_Lag_Days', 2)]

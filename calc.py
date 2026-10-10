@@ -3,13 +3,17 @@ import re
 import numpy as np
 import pandas as pd
 
-WASH_NUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Downtime_Min', 'Rewash_Output', 'Reject']
+WASH_NUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject', 'Downtime_Min']
 DRY_NUM = ['Input', 'Output', 'Defect', 'Rework', 'Downtime_Min']
-WASH_COLS = ['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'Input', 'Output', 'QC_Inspected',
-             'Defect', 'Rewash', 'Downtime_Min', 'Downtime_Reason', 'Remarks']
-WASH_EXTRA = ['PO', 'Color', 'Rewash_Output', 'Reject']   # new columns, added to the right of Remarks in Wash_Log
-DRY_COLS = ['Date', 'Hour', 'Unit', 'Process', 'Style', 'Input', 'Output', 'Defect', 'Rework',
+WASH_COLS = ['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'PO', 'Color', 'Input', 'Output', 'QC_Inspected',
+             'Defect', 'Rewash', 'Rewash_Output', 'Reject', 'Downtime_Min', 'Downtime_Reason', 'Remarks']
+DRY_COLS = ['Date', 'Hour', 'Unit', 'Process', 'Style', 'PO', 'Color', 'Input', 'Output', 'Defect', 'Rework',
             'Downtime_Min', 'Downtime_Reason', 'Remarks']
+ORDER_COLS = ['Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'CRD', 'CRD_Revisions', 'Updated_CRD', 'Sewing_Unit',
+              'Order_Qty', 'Plan_Start', 'Plan_End', 'Shade_Submit_Date', 'Shade_Approval_Date', 'Merchant', 'Remarks']
+PLAN_COLS = ['Date', 'Wash_Plant', 'Style', 'PO', 'Color', 'Plan_Input', 'Plan_Output']
+KEYS = ['Style', 'PO', 'Color']
+NO_PO, NO_COLOR = '(no PO)', '(no color)'
 WIP_COLS = ['Date', 'Unit', 'Stage', 'Opening_WIP', 'Remarks']
 MACHINE_COLS = ['Unit', 'Machine_ID', 'Type', 'Plan_per_hr', 'Active']
 PROCESS_COLS = ['Unit', 'Process', 'Machines', 'Capacity_per_day', 'Active']
@@ -17,15 +21,11 @@ HOURS = list(range(1, 25))
 NO_STYLE = '(no style)'
 
 DEFAULT_SETTINGS = dict(Run_Hours=24.0, Day_Start_Hour=8.0, Plan_Basis=1.0, Target_Pct=0.95,
-                        Alert_Pct=0.80, Max_Defect_Pct=0.03, Max_Rewash_Pct=0.02)
+                        Alert_Pct=0.80, Max_Defect_Pct=0.03, Max_Rewash_Pct=0.02, Output_Lag_Days=2.0)
 _PCT_KEYS = {'Plan_Basis', 'Target_Pct', 'Alert_Pct', 'Max_Defect_Pct', 'Max_Rewash_Pct'}
 
 
 # ---------------------------------------------------------------- helpers
-def _clean_str(s):
-    return s.fillna('').astype(str).str.strip().replace({'nan': '', 'None': '', 'NaT': ''})
-
-
 def parse_settings(df):
     s = dict(DEFAULT_SETTINGS)
     if df is not None and len(df) and {'Key', 'Value'} <= set(df.columns):
@@ -91,12 +91,14 @@ def _prep_log(df, cols, nums, key_col, day_start):
     for c in nums:
         d[c] = to_num(d[c])
     d = d[d[nums].notna().any(axis=1)].copy()
-    for c in ('Unit', key_col, 'Style', 'Downtime_Reason'):
-        d[c] = d[c].fillna('').astype(str).str.strip()
+    for c in ('Unit', key_col, 'Style', 'PO', 'Color', 'Downtime_Reason'):
+        d[c] = d[c].fillna('').astype(str).str.strip().replace({'nan': '', 'None': ''})
     if 'Machine_ID' == key_col:
         blank = d['Unit'] == ''
         d.loc[blank, 'Unit'] = d.loc[blank, 'Machine_ID'].str.rsplit('-', n=2).str[0]
-    d.loc[d['Style'].isin(['', 'nan', 'None']), 'Style'] = NO_STYLE
+    d.loc[d['Style'] == '', 'Style'] = NO_STYLE
+    d.loc[d['PO'] == '', 'PO'] = NO_PO
+    d.loc[d['Color'] == '', 'Color'] = NO_COLOR
     d[nums] = d[nums].fillna(0)
     bad = d['Date'].isna() | d['Hour_Idx'].isna() | (d[key_col] == '')
     rejected = d[bad].copy()
@@ -109,9 +111,8 @@ def _prep_log(df, cols, nums, key_col, day_start):
 
 
 def prep_wash(df, day_start=8):
-    d, rej = _prep_log(df, WASH_COLS + WASH_EXTRA, WASH_NUM, 'Machine_ID', day_start)
-    for c in ('Wash_Type', 'PO', 'Color'):
-        d[c] = _clean_str(d[c])
+    d, rej = _prep_log(df, WASH_COLS, WASH_NUM, 'Machine_ID', day_start)
+    d['Wash_Type'] = d['Wash_Type'].fillna('').astype(str).str.strip()
     return d, rej
 
 
@@ -403,157 +404,210 @@ def health_checks(w_day, dd_day, mm, mp, unit, until, basis=1.0, rejected_w=None
     return out
 
 
-# ================================================================ STYLE DETAILS (lot-wise tracking)
-# One "lot" = Wash plant + Style + PO + Color + Wash type. Plan comes from the Style_Plan tab, buyer/CRD/merchant data from Style_Master,
-# actuals from Wash_Log. Everything is cumulative "till the selected date" so it also works across month-end archive sheets.
-PLAN_COLS = ['Date', 'Unit', 'Style', 'PO', 'Color', 'Wash_Type', 'Input_Plan', 'Output_Plan', 'Remarks']
-SMASTER_COLS = ['Buyer', 'Style', 'PO', 'Color', 'CRD', 'CRD_Revision_Count', 'Updated_CRD', 'Sewing_Unit',
-                'Shade_Approval_Date', 'Merchant']
-LOT_KEY = ['Unit', 'Style', 'PO', 'Color', 'Wash_Type']
-LOT_SUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject', 'Input_Plan', 'Output_Plan']
+# ---------------------------------------------------------------- order master and style details
+def prep_order(df):
+    d = _ensure(df, ORDER_COLS)
+    d = d[~d['Remarks'].astype(str).str.upper().str.startswith('EXAMPLE')].copy()
+    for c in ['Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'Sewing_Unit', 'Merchant']:
+        d[c] = d[c].fillna('').astype(str).str.strip().replace({'nan': '', 'None': ''})
+    d = d[d['Style'] != ''].copy()
+    d.loc[d['PO'] == '', 'PO'] = NO_PO
+    d.loc[d['Color'] == '', 'Color'] = NO_COLOR
+    for c in ['CRD', 'Updated_CRD', 'Plan_Start', 'Plan_End', 'Shade_Submit_Date', 'Shade_Approval_Date']:
+        d[c] = parse_date(d[c])
+    d['Order_Qty'] = to_num(d['Order_Qty'])
+    d['CRD_Revisions'] = to_num(d['CRD_Revisions'])
+    return d.drop_duplicates(['Wash_Plant'] + KEYS).reset_index(drop=True)
 
 
+def _mach_text(s, unit, maxn=6):
+    ids = sorted({str(x).replace(unit + '-', '', 1) for x in s if str(x)})
+    return ', '.join(ids) if len(ids) <= maxn else ', '.join(ids[:maxn]) + f' ... ({len(ids)} machines)'
+
+
+# (internal name, display label) in the exact order requested
+DETAIL_COLS = [
+    ('Wash_Plant', 'Wash plant'), ('Buyer', 'Buyer'), ('Style', 'Style'), ('PO', 'PO'), ('Color', 'Color'), ('Wash_Type', 'Wash Type'),
+    ('CRD', 'CRD'), ('CRD_Revisions', 'CRD Revision count'), ('Updated_CRD', 'Updated CRD'), ('Machines', 'Machine IDs (Used for that style)'),
+    ('Sewing_Unit', 'Sewing Unit'), ('Input_Plan', 'Wash Input Plan till today'), ('Input', 'Actual Input'), ('Input_Var', 'Variation'),
+    ('Output_Plan', 'Wash Output Plan till today'), ('Output', 'Actual Output'), ('Output_Var', 'Variation'), ('Achv_Pct', 'Achievement (%)'),
+    ('WIP', 'WIP'), ('Rewash', 'Rewash Input'), ('Rewash_Output', 'Rewash Output'), ('Rewash_WIP', 'Rewash WIP'), ('Total_WIP', 'Total WIP'),
+    ('Rewash_Pct', 'Rewash (%) till today'), ('Defect', 'Quality Issue (Pcs)'), ('DHU', 'DHU (%)'), ('Reject', 'Rejection (Pcs)'),
+    ('Reject_Pct', 'Rejection (%)'), ('Hold_First', '1st cycle Holding time (days)'), ('First_In_Date', '1st input date'),
+    ('First_Out_Date', '1st Output date'), ('Hold_Last', 'last cycle holding time'), ('Last_In_Date', 'last input date'),
+    ('Last_Out_Date', 'last output date'), ('Shade_Approval_Date', 'Shade Approval date'), ('Approval_Days', 'Approval time (days)'),
+    ('Merchant', 'Responsible Merchant Name')]
+DETAIL_DATES = ['CRD', 'Updated_CRD', 'First_In_Date', 'First_Out_Date', 'Last_In_Date', 'Last_Out_Date', 'Shade_Approval_Date']
+
+
+def style_details(w, order, unit, asof, until, day_start=8.0, lag_days=2.0, plan=None):
+    """One row per Style/PO/Color for a wash unit, cumulative till (asof date, until hour)."""
+    asof = pd.Timestamp(asof).normalize()
+    d = w[(w['Unit'] == unit) & ((w['Date'] < asof) | ((w['Date'] == asof) & (w['Hour_Idx'] <= until)))].copy()
+    sums = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject']
+    if len(d):
+        d['DT'] = d['Date'] + pd.to_timedelta(float(day_start) + d['Hour_Idx'] - 1, unit='h')
+        gb = d.groupby(KEYS)
+        lg = gb[sums].sum()
+        lg['Log_Wash_Type'] = gb['Wash_Type'].agg(lambda s: s[s != ''].mode().iat[0] if (s != '').any() else '')
+        lg['Machines'] = gb['Machine_ID'].agg(lambda s: _mach_text(s, unit))
+        lg['Machines_Full'] = gb['Machine_ID'].agg(lambda s: ', '.join(sorted({str(x) for x in s if str(x)})))
+        fi = d[d['Input'] > 0].groupby(KEYS).agg(First_In=('DT', 'min'), Last_In=('DT', 'max'), First_In_Date=('Date', 'min'), Last_In_Date=('Date', 'max'))
+        fo = d[d['Output'] > 0].groupby(KEYS).agg(First_Out=('DT', 'min'), Last_Out=('DT', 'max'), First_Out_Date=('Date', 'min'), Last_Out_Date=('Date', 'max'))
+        logged = lg.join(fi).join(fo).reset_index()
+    else:
+        logged = pd.DataFrame(columns=KEYS + sums + ['Log_Wash_Type', 'Machines', 'Machines_Full', 'First_In', 'Last_In', 'First_Out', 'Last_Out',
+                                                    'First_In_Date', 'Last_In_Date', 'First_Out_Date', 'Last_Out_Date'])
+    om = order[(order['Wash_Plant'] == unit) | (order['Wash_Plant'] == '')] if len(order) else pd.DataFrame(columns=ORDER_COLS)
+    t = om.merge(logged, on=KEYS, how='outer')
+    t['Wash_Plant'] = unit
+    for c in ['CRD', 'Updated_CRD', 'Plan_Start', 'Plan_End', 'Shade_Submit_Date', 'Shade_Approval_Date']:
+        t[c] = pd.to_datetime(t[c], errors='coerce')
+    for c in ['Order_Qty', 'CRD_Revisions']:
+        t[c] = pd.to_numeric(t[c], errors='coerce')
+    for c in sums:
+        t[c] = pd.to_numeric(t[c], errors='coerce').fillna(0)
+    for c in ['Buyer', 'Sewing_Unit', 'Merchant', 'Machines', 'Machines_Full', 'Wash_Type', 'Log_Wash_Type']:
+        t[c] = t[c].fillna('').astype(str).replace({'nan': ''})
+    t['Wash_Type'] = t['Wash_Type'].where(t['Wash_Type'] != '', t['Log_Wash_Type'])
+    for c in ['First_In', 'Last_In', 'First_Out', 'Last_Out', 'First_In_Date', 'Last_In_Date', 'First_Out_Date', 'Last_Out_Date']:
+        t[c] = pd.to_datetime(t[c], errors='coerce')
+    dp = order_daily_plan(order, plan, unit, lag_days)
+    cp = cum_plan_at(dp, asof, until)
+    t = t.merge(cp, on=KEYS, how='left')
+    t['Plan_Source'] = t['Plan_Source'].fillna('')
+    t['Input_Var'] = t['Input'] - t['Input_Plan']
+    t['Output_Var'] = t['Output'] - t['Output_Plan']
+    t['Achv_Pct'] = safe_div(t['Output'], t['Output_Plan']) * 100
+    t['WIP'] = t['Input'] - t['Output']
+    t['Rewash_WIP'] = t['Rewash'] - t['Rewash_Output']
+    t['Total_WIP'] = t['WIP'] + t['Rewash_WIP']
+    t['Rewash_Pct'] = safe_div(t['Rewash'], t['Output']) * 100
+    t['DHU'] = safe_div(t['Defect'], t['QC_Inspected']) * 100
+    t['Reject_Pct'] = safe_div(t['Reject'], t['Input']) * 100
+    day = pd.Timedelta(days=1)
+    t['Hold_First'] = (t['First_Out'] - t['First_In']) / day
+    t['Hold_Last'] = (t['Last_Out'] - t['Last_In']) / day
+    start = t['Shade_Submit_Date'].where(t['Shade_Submit_Date'].notna(), t['First_Out_Date'])
+    t['Approval_Days'] = (t['Shade_Approval_Date'] - start) / day
+    t = t.sort_values(['Output', 'Input'], ascending=False).reset_index(drop=True)
+    return t[[c for c, _ in DETAIL_COLS] + ['Machines_Full', 'Plan_Source']]
+
+
+# ---------------------------------------------------------------- daily plan and daily ledger
 def prep_plan(df):
     d = _ensure(df, PLAN_COLS)
-    d = d[~d['Remarks'].astype(str).str.upper().str.startswith('EXAMPLE')].copy()
-    d['Date'] = parse_date(d['Date'])
-    for c in ('Input_Plan', 'Output_Plan'):
-        d[c] = to_num(d[c])
-    d = d[d['Date'].notna() & d[['Input_Plan', 'Output_Plan']].notna().any(axis=1)].copy()
-    d[['Input_Plan', 'Output_Plan']] = d[['Input_Plan', 'Output_Plan']].fillna(0)
-    for c in LOT_KEY:
-        d[c] = _clean_str(d[c])
-    return d[d['Style'] != ''].copy()
-
-
-def prep_smaster(df):
-    d = _ensure(df, SMASTER_COLS)
-    for c in ('Buyer', 'Style', 'PO', 'Color', 'Sewing_Unit', 'Merchant'):
-        d[c] = _clean_str(d[c])
-    for c in ('CRD', 'Updated_CRD', 'Shade_Approval_Date'):
-        d[c] = parse_date(d[c].astype(str))
-    d['CRD_Revision_Count'] = to_num(d['CRD_Revision_Count'])
+    for c in ['Wash_Plant', 'Style', 'PO', 'Color']:
+        d[c] = d[c].fillna('').astype(str).str.strip().replace({'nan': '', 'None': ''})
     d = d[d['Style'] != ''].copy()
-    return d.drop_duplicates(['Style', 'PO', 'Color'], keep='last')[SMASTER_COLS]
+    d.loc[d['PO'] == '', 'PO'] = NO_PO
+    d.loc[d['Color'] == '', 'Color'] = NO_COLOR
+    d['Date'] = parse_date(d['Date'])
+    d['Plan_Input'] = to_num(d['Plan_Input']).fillna(0)
+    d['Plan_Output'] = to_num(d['Plan_Output']).fillna(0)
+    return d[d['Date'].notna()].reset_index(drop=True)
 
 
-def lot_daily(w, plan, upto):
-    """Day x lot table (actuals + plan) up to and including `upto`. Rows without a style are left out."""
-    upto = pd.Timestamp(upto)
-    w = w[(w['Date'] <= upto) & (w['Style'] != NO_STYLE)]
-    plan = plan[plan['Date'] <= upto].copy()
-    if len(plan) and len(w):   # plan rows without a wash type take it from the log of the same style/PO/color
-        wt = w[w['Wash_Type'] != ''].drop_duplicates(['Unit', 'Style', 'PO', 'Color']).set_index(['Unit', 'Style', 'PO', 'Color'])['Wash_Type']
-        blank = plan['Wash_Type'] == ''
-        idx = pd.MultiIndex.from_frame(plan.loc[blank, ['Unit', 'Style', 'PO', 'Color']])
-        plan.loc[blank, 'Wash_Type'] = wt.reindex(idx).fillna('').values
-    gw = w.groupby(LOT_KEY + ['Date'])[['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject']].sum().reset_index()
-    gp = plan.groupby(LOT_KEY + ['Date'])[['Input_Plan', 'Output_Plan']].sum().reset_index()
-    d = gw.merge(gp, on=LOT_KEY + ['Date'], how='outer')
-    d[LOT_SUM] = d[LOT_SUM].fillna(0.0)
-    return d.sort_values(LOT_KEY + ['Date']).reset_index(drop=True)
+def order_daily_plan(order, plan, unit, lag_days=2.0):
+    """Daily plan per Style/PO/Color. Real Daily_Plan rows win; otherwise Order_Qty is spread evenly over
+    Plan_Start..Plan_End (input) and the same window shifted by lag_days (output)."""
+    rows = []
+    om = order[(order['Wash_Plant'] == unit) | (order['Wash_Plant'] == '')] if order is not None and len(order) else pd.DataFrame(columns=ORDER_COLS)
+    pl = plan[(plan['Wash_Plant'] == unit) | (plan['Wash_Plant'] == '')] if plan is not None and len(plan) else pd.DataFrame(columns=PLAN_COLS)
+    have = set(map(tuple, pl[KEYS].drop_duplicates().values)) if len(pl) else set()
+    for r in om.itertuples():
+        key = (r.Style, r.PO, r.Color)
+        if key in have:
+            continue
+        if pd.isna(r.Order_Qty) or pd.isna(r.Plan_Start) or pd.isna(r.Plan_End) or r.Plan_End < r.Plan_Start:
+            continue
+        days = pd.date_range(r.Plan_Start, r.Plan_End, freq='D')
+        per = r.Order_Qty / len(days)
+        rows.append(pd.DataFrame({'Style': key[0], 'PO': key[1], 'Color': key[2], 'Date': days, 'Plan_Input': per, 'Plan_Output': 0.0}))
+        rows.append(pd.DataFrame({'Style': key[0], 'PO': key[1], 'Color': key[2], 'Date': days + pd.Timedelta(days=int(round(lag_days))),
+                                  'Plan_Input': 0.0, 'Plan_Output': per}))
+    cols = KEYS + ['Date', 'Plan_Input', 'Plan_Output']
+    sl = pd.concat(rows, ignore_index=True) if rows else pd.DataFrame(columns=cols)
+    sl['Plan_Source'] = 'Straight-line from Order_Qty'
+    dr = pl[cols].copy() if len(pl) else pd.DataFrame(columns=cols)
+    dr['Plan_Source'] = 'Daily_Plan tab'
+    out = pd.concat([sl, dr], ignore_index=True)
+    if out.empty:
+        return out
+    out['Date'] = pd.to_datetime(out['Date'])
+    return out.groupby(KEYS + ['Date', 'Plan_Source'], as_index=False)[['Plan_Input', 'Plan_Output']].sum()
 
 
-def lot_ledger_all(daily):
-    """Day-wise tracker for every lot: available input/output (today's plan + balance carried forward), WIP roll-forward."""
-    d = daily.sort_values(LOT_KEY + ['Date']).copy()
-    if d.empty:
-        return d
-    g = d.groupby(LOT_KEY, sort=False)
-    for c in ('Input_Plan', 'Input', 'Output_Plan', 'Output', 'Rewash', 'Rewash_Output'):
-        d['cum_' + c] = g[c].cumsum()
-        d['prev_' + c] = d['cum_' + c] - d[c]
-    d['In_BF'] = (d['prev_Input_Plan'] - d['prev_Input']).clip(lower=0)
-    d['In_Avail'] = d['Input_Plan'] + d['In_BF']
-    d['In_Var'] = d['Input'] - d['In_Avail']
-    d['Out_BF'] = (d['prev_Output_Plan'] - d['prev_Output']).clip(lower=0)
-    d['Out_Avail'] = d['Output_Plan'] + d['Out_BF']
-    d['Out_Var'] = d['Output'] - d['Out_Avail']
-    d['Open_WIP'] = d['prev_Input'] - d['prev_Output']
-    d['Close_WIP'] = d['cum_Input'] - d['cum_Output']
-    d['RW_WIP'] = d['cum_Rewash'] - d['cum_Rewash_Output']
-    d['Total_WIP'] = d['Close_WIP'] + d['RW_WIP']
-    d['Month'] = d['Date'].dt.strftime('%b-%Y')
-    return d
+def cum_plan_at(dp, asof, until):
+    """Cumulative plan per order till (asof date, until hour): full earlier days + until/24 of the as-of day."""
+    if dp is None or dp.empty:
+        return pd.DataFrame(columns=KEYS + ['Input_Plan', 'Output_Plan', 'Plan_Source'])
+    asof = pd.Timestamp(asof).normalize()
+    d = dp[dp['Date'] <= asof].copy()
+    w = np.where(d['Date'] == asof, until / 24.0, 1.0)
+    d['Input_Plan'] = d['Plan_Input'] * w
+    d['Output_Plan'] = d['Plan_Output'] * w
+    return d.groupby(KEYS).agg(Input_Plan=('Input_Plan', 'sum'), Output_Plan=('Output_Plan', 'sum'), Plan_Source=('Plan_Source', 'first')).reset_index()
 
 
-LEDGER_COLS = [('Date', 'Date'), ('Month', 'Month'), ('Input_Plan', 'Input plan (today)'), ('In_BF', 'Input balance b/f'),
-               ('In_Avail', 'Available input plan'), ('Input', 'Actual input'), ('In_Var', 'Input variation'),
-               ('Output_Plan', 'Output plan (today)'), ('Out_BF', 'Output balance b/f'), ('Out_Avail', 'Available output plan'),
-               ('Output', 'Actual output'), ('Out_Var', 'Output variation'), ('Open_WIP', 'Opening WIP'), ('Close_WIP', 'Closing WIP'),
-               ('Rewash', 'Rewash input'), ('Rewash_Output', 'Rewash output'), ('RW_WIP', 'Rewash WIP'), ('Total_WIP', 'Total WIP'),
-               ('Defect', 'Quality issue (pcs)'), ('Reject', 'Rejection (pcs)')]
+LEDGER_NUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject']
 
 
-def ledger_view(led):
-    v = led[[a for a, _ in LEDGER_COLS]].copy()
-    v['Date'] = v['Date'].dt.strftime('%d-%b-%y')
-    return v.rename(columns=dict(LEDGER_COLS))
-
-
-def _days(a, b):
-    out = (b - a).dt.days
-    return out.where(out >= 0)
-
-
-def lot_summary(daily, w, sm):
-    """One row per lot, cumulative till the last date inside `daily`. Column order of the report is set in details_view()."""
-    if daily.empty:
+def style_ledger(w, dp, unit, keys, asof, until):
+    """Day-by-day tracking for Style/PO/Color keys up to (asof, until).
+    Opening WIP of a day = previous day's closing WIP, so it carries across months."""
+    asof = pd.Timestamp(asof).normalize()
+    kdf = pd.DataFrame(list(keys), columns=KEYS)
+    d = w[(w['Unit'] == unit) & ((w['Date'] < asof) | ((w['Date'] == asof) & (w['Hour_Idx'] <= until)))]
+    d = d.merge(kdf, on=KEYS)
+    act = d.groupby('Date')[LEDGER_NUM].sum() if len(d) else pd.DataFrame(columns=LEDGER_NUM, dtype=float)
+    p = dp.merge(kdf, on=KEYS) if dp is not None and len(dp) else pd.DataFrame(columns=['Date', 'Plan_Input', 'Plan_Output'])
+    p = p[p['Date'] <= asof]
+    pl = p.groupby('Date')[['Plan_Input', 'Plan_Output']].sum() if len(p) else pd.DataFrame(columns=['Plan_Input', 'Plan_Output'], dtype=float)
+    if len(pl) and asof in pl.index:
+        pl.loc[asof] = pl.loc[asof] * (until / 24.0)
+    if act.empty and pl.empty:
         return pd.DataFrame()
-    g = daily.groupby(LOT_KEY)[LOT_SUM].sum()
-    for col, tag in (('Input', 'In'), ('Output', 'Out')):
-        x = daily[daily[col] > 0].groupby(LOT_KEY)['Date']
-        g['First_' + tag] = x.min()
-        g['Last_' + tag] = x.max()
-    g = g.reset_index()
-    wl = w[(w['Style'] != NO_STYLE) & ((w['Input'] > 0) | (w['Output'] > 0)) & (w['Date'] <= daily['Date'].max())]
-    mach = wl.groupby(LOT_KEY)['Machine_ID'].agg(lambda s: ', '.join(sorted(set(s)))).rename('Machine_IDs').reset_index()
-    g = g.merge(mach, on=LOT_KEY, how='left')
-    g['Machine_IDs'] = g['Machine_IDs'].fillna('')
-    m1 = g[['Style', 'PO', 'Color']].merge(sm, on=['Style', 'PO', 'Color'], how='left')
-    style_only = sm[(sm['PO'] == '') & (sm['Color'] == '')].drop(columns=['PO', 'Color']).drop_duplicates('Style')
-    m2 = g[['Style']].merge(style_only, on='Style', how='left')
-    for c in [c for c in SMASTER_COLS if c not in ('Style', 'PO', 'Color')]:
-        ok = m1[c].notna()
-        if c in ('Buyer', 'Sewing_Unit', 'Merchant'):
-            ok &= m1[c].astype(str) != ''
-        g[c] = m1[c].where(ok, m2[c]).values
-    g['In_Var'] = g['Input'] - g['Input_Plan']
-    g['Out_Var'] = g['Output'] - g['Output_Plan']
-    g['Achv'] = safe_div(g['Output'], g['Output_Plan'])
-    g['WIP'] = g['Input'] - g['Output']
-    g['RW_WIP'] = g['Rewash'] - g['Rewash_Output']
-    g['Total_WIP'] = g['WIP'] + g['RW_WIP']
-    g['RW_Pct'] = safe_div(g['Rewash'], g['Output'])
-    g['DHU'] = safe_div(g['Defect'], g['QC_Inspected'])
-    g['Rej_Pct'] = safe_div(g['Reject'], g['Input'])
-    g['Hold1'] = _days(g['First_In'], g['First_Out'])
-    g['HoldL'] = _days(g['Last_In'], g['Last_Out'])
-    g['Approval_Days'] = _days(g['First_In'], g['Shade_Approval_Date'])
-    return g.sort_values(['Unit', 'Buyer', 'Style', 'PO', 'Color'], na_position='last').reset_index(drop=True)
+    start = min(x for x in [act.index.min() if len(act) else None, pl.index.min() if len(pl) else None] if x is not None)
+    L = pd.DataFrame(index=pd.date_range(start, asof, freq='D')).join(act).join(pl)
+    for c in LEDGER_NUM + ['Plan_Input', 'Plan_Output']:
+        L[c] = pd.to_numeric(L[c], errors='coerce').fillna(0.0)
+    L['Closing_WIP'] = (L['Input'] - L['Output']).cumsum()
+    L['Opening_WIP'] = L['Closing_WIP'].shift(1).fillna(0.0)
+    L['Available_Input'] = L['Opening_WIP'] + L['Input']
+    L['Input_Var'] = L['Input'] - L['Plan_Input']
+    L['Output_Var'] = L['Output'] - L['Plan_Output']
+    L['Cum_Input_Plan'] = L['Plan_Input'].cumsum(); L['Cum_Input'] = L['Input'].cumsum()
+    L['Cum_Output_Plan'] = L['Plan_Output'].cumsum(); L['Cum_Output'] = L['Output'].cumsum()
+    L['Cum_Input_Var'] = L['Cum_Input'] - L['Cum_Input_Plan']
+    L['Cum_Output_Var'] = L['Cum_Output'] - L['Cum_Output_Plan']
+    L['Achv_Pct'] = safe_div(L['Output'], L['Plan_Output']) * 100
+    L['Cum_Achv_Pct'] = safe_div(L['Cum_Output'], L['Cum_Output_Plan']) * 100
+    L['Rewash_WIP'] = (L['Rewash'] - L['Rewash_Output']).cumsum()
+    L['Total_WIP'] = L['Closing_WIP'] + L['Rewash_WIP']
+    L['Month'] = L.index.strftime('%Y-%m')
+    ev = pd.Series('', index=L.index, dtype=object)
+    def mark(mask, text):
+        if mask.any():
+            i = mask.idxmax()
+            ev.loc[i] = (ev.loc[i] + ', ' if ev.loc[i] else '') + text
+    mark(L['Input'] > 0, '1st input'); mark(L['Output'] > 0, '1st output')
+    mark((L['Input'] > 0)[::-1], 'last input'); mark((L['Output'] > 0)[::-1], 'last output')
+    for i in L.index[L['Month'] != L['Month'].shift(1)]:
+        if i != L.index[0]:
+            ev.loc[i] = (ev.loc[i] + ', ' if ev.loc[i] else '') + f"month opening carry-forward {L.loc[i, 'Opening_WIP']:,.0f}"
+    L['Event'] = ev
+    L.index.name = 'Date'
+    return L.reset_index()
 
 
-# (internal column, label shown in the report) - this is the exact column sequence requested for the Details view
-DETAIL_COLS = [('Unit', 'Wash plant'), ('Buyer', 'Buyer'), ('Style', 'Style'), ('PO', 'PO'), ('Color', 'Color'), ('Wash_Type', 'Wash Type'),
-               ('CRD', 'CRD'), ('CRD_Revision_Count', 'CRD Revision count'), ('Updated_CRD', 'Updated CRD'),
-               ('Machine_IDs', 'Machine IDs (Used for that style)'), ('Sewing_Unit', 'Sewing Unit'),
-               ('Input_Plan', 'Wash Input Plan till today'), ('Input', 'Actual Input'), ('In_Var', 'Input Variation'),
-               ('Output_Plan', 'Wash Output Plan till today'), ('Output', 'Actual Output'), ('Out_Var', 'Output Variation'),
-               ('Achv', 'Achievement (%)'), ('WIP', 'WIP'), ('Rewash', 'Rewash Input'), ('Rewash_Output', 'Rewash Output'),
-               ('RW_WIP', 'Rewash WIP'), ('Total_WIP', 'Total WIP'), ('RW_Pct', 'Rewash (%) till today'),
-               ('Defect', 'Quality Issue (Pcs)'), ('DHU', 'DHU (%)'), ('Reject', 'Rejection (Pcs)'), ('Rej_Pct', 'Rejection (%)'),
-               ('Hold1', '1st cycle Holding time (days)'), ('First_In', '1st input date'), ('First_Out', '1st Output date'),
-               ('HoldL', 'last cycle holding time'), ('Last_In', 'last input date'), ('Last_Out', 'last output date'),
-               ('Shade_Approval_Date', 'Shade Approval date'), ('Approval_Days', 'Approval time (days)'),
-               ('Merchant', 'Responsible Merchant Name')]
-_DATE_COLS = ['CRD', 'Updated_CRD', 'First_In', 'First_Out', 'Last_In', 'Last_Out', 'Shade_Approval_Date']
-_PCT_COLS = ['Achv', 'RW_Pct', 'DHU', 'Rej_Pct']
-
-
-def details_view(summary):
-    v = summary[[a for a, _ in DETAIL_COLS]].copy()
-    for c in _DATE_COLS:
-        v[c] = v[c].dt.strftime('%d-%b-%y').fillna('')
-    for c in _PCT_COLS:
-        v[c] = (v[c] * 100).round(1)
-    return v.rename(columns=dict(DETAIL_COLS))
+def ledger_months(L):
+    if L is None or L.empty:
+        return pd.DataFrame()
+    g = L.groupby('Month').agg(Days=('Date', 'nunique'), Opening_WIP=('Opening_WIP', 'first'), Plan_Input=('Plan_Input', 'sum'), Input=('Input', 'sum'),
+                               Plan_Output=('Plan_Output', 'sum'), Output=('Output', 'sum'), Closing_WIP=('Closing_WIP', 'last'),
+                               Rewash=('Rewash', 'sum'), Rewash_Output=('Rewash_Output', 'sum'), Reject=('Reject', 'sum')).reset_index()
+    g['Input_Var'] = g['Input'] - g['Plan_Input']
+    g['Output_Var'] = g['Output'] - g['Plan_Output']
+    g['Achv_Pct'] = safe_div(g['Output'], g['Plan_Output']) * 100
+    return g

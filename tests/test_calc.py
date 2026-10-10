@@ -45,11 +45,46 @@ def test_all():
         ['2026-10-06', '10:00-11:00', 'CWL-1', 'CWL-1-FL-03', '', '', '', '', '', '', '', '', '', ''],
         ['2026-10-06', 'xx', 'CWL-1', 'CWL-1-FL-04', '', '', '5', '5', '', '', '', '', '', ''],
         ['2026-10-06', '08:00-09:00', 'CWL-1', 'CWL-1-FL-05', '', '', '5', '5', '', '', '', '', '', 'EXAMPLE row']],
-        columns=calc.WASH_COLS)
+        columns=['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Downtime_Min', 'Downtime_Reason', 'Remarks'])  # old 14-column sheet still works
     c, rj = calc.prep_wash(raw, 8)
     assert len(c) == 2 and len(rj) == 1, (len(c), len(rj))
     assert c['Unit'].tolist() == ['CWL-1', 'CWL-1'] and c['Hour_Idx'].tolist() == [1, 2] and c['Style'].tolist() == ['S1', '(no style)']
     assert c['Date'].iloc[0] == pd.Timestamp('2026-10-06'), c['Date'].iloc[0]   # serial 46301
+    # ---- style details
+    st_o = calc.prep_order(pd.read_csv(D / 'Order_Master.csv', dtype=str, keep_default_na=False))
+    asof = pd.Timestamp('2026-10-06')
+    T = calc.style_details(w, st_o, unit, asof, 24, st['Day_Start_Hour'], st['Output_Lag_Days'])
+    assert [c for c, _ in calc.DETAIL_COLS] == list(T.columns[:-2]) and len(calc.DETAIL_COLS) == 37
+    assert abs(T['Input'].sum() - w[(w.Unit == unit) & (w.Date <= asof)]['Input'].sum()) < 1e-6      # nothing lost / double counted
+    assert abs(T['Output'].sum() - w[(w.Unit == unit) & (w.Date <= asof)]['Output'].sum()) < 1e-6
+    r0 = T[T['PO'] == 'PO-77101'].iloc[0]
+    assert abs(r0['WIP'] - (r0['Input'] - r0['Output'])) < 1e-9 and abs(r0['Total_WIP'] - (r0['WIP'] + r0['Rewash_WIP'])) < 1e-9
+    assert abs(r0['Input_Var'] - (r0['Input'] - r0['Input_Plan'])) < 1e-9
+    assert 0.5 < r0['Hold_First'] < 4 and r0['Last_Out_Date'] >= r0['Last_In_Date']
+    # as-of earlier day: less input; plan fraction lower
+    T2 = calc.style_details(w, st_o, unit, pd.Timestamp('2026-09-25'), 12, st['Day_Start_Hour'], 2)
+    assert T2['Input'].sum() < T['Input'].sum() and T2.loc[T2.PO == 'PO-77101', 'Input_Plan'].iloc[0] < r0['Input_Plan']
+    # no Order_Master at all -> still works, master columns blank
+    T3 = calc.style_details(w, calc.prep_order(pd.DataFrame()), unit, asof, 24)
+    assert len(T3) == 14 and T3['Input_Plan'].isna().all() and T3['Buyer'].eq('').all()
+    # before anything was logged
+    T4 = calc.style_details(w, st_o, unit, pd.Timestamp('2026-09-01'), 24)
+    assert (T4['Input'] == 0).all()
+    print(T[['Style', 'PO', 'Input_Plan', 'Input', 'Achv_Pct', 'Total_WIP', 'Hold_First', 'Hold_Last']].head(3).round(1).to_string())
+    # ---- daily plan / ledger
+    pl = calc.prep_plan(pd.read_csv(D / 'Daily_Plan.csv', dtype=str, keep_default_na=False))
+    T5 = calc.style_details(w, st_o, unit, asof, 24, st['Day_Start_Hour'], 2, pl)
+    assert set(T5['Plan_Source']) >= {'Daily_Plan tab', 'Straight-line from Order_Qty'}
+    dp = calc.order_daily_plan(st_o, pl, unit, 2)
+    key = ('ST-4412 Dark Stone', 'PO-77101', 'Dark Blue')
+    Lg = calc.style_ledger(w, dp, unit, [key], asof, 24)
+    assert abs(Lg['Closing_WIP'].iloc[-1] - (Lg['Input'].sum() - Lg['Output'].sum())) < 1e-6
+    assert (Lg['Opening_WIP'].iloc[1:].values == Lg['Closing_WIP'].iloc[:-1].values).all()       # carry-forward
+    assert (Lg['Available_Input'] == Lg['Opening_WIP'] + Lg['Input']).all()
+    r5 = T5[T5.PO == 'PO-77101'].iloc[0]
+    assert abs(Lg['Cum_Input_Plan'].iloc[-1] - r5['Input_Plan']) < 1e-6 and abs(Lg['Cum_Output'].iloc[-1] - r5['Output']) < 1e-6
+    assert set(calc.ledger_months(Lg)['Month']) == {'2026-09', '2026-10'}
+    assert calc.style_ledger(w, dp, unit, [key], pd.Timestamp('2026-09-01'), 24).empty
     print('ALL OK')
 
 if __name__ == '__main__':

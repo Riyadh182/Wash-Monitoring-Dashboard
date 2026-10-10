@@ -32,6 +32,8 @@ def build(cfg):
     st.text_input = lambda label, **k: cfg.get('style', '')
     st.multiselect = lambda label, options, default=None, **k: cfg.get(label, list(default or []))
     st.button = lambda *a, **k: False
+    st.radio = lambda label, options, **k: cfg.get('view', options[0])
+    st.expander = lambda *a, **k: Dummy()
     st.download_button = lambda *a, **k: False
     st.columns = lambda n, **k: [Dummy() for _ in range(n if isinstance(n, int) else len(n))]
     st.tabs = lambda labels: [Dummy() for _ in labels]
@@ -69,6 +71,11 @@ cases = {
  'style no match': {'style': 'zzz'},
  'wash type': {'Wash type': ['Acid']},
  'empty date (no data)': {'Date': dt.date(2026, 10, 20)},
+ 'style details': {'view': 'Style details'},
+ 'style details + search': {'view': 'Style details', 'style': 'ST-4412'},
+ 'style details no match': {'view': 'Style details', 'style': 'zzz'},
+ 'style details empty date': {'view': 'Style details', 'Date': dt.date(2026, 9, 1)},
+ 'ledger default': {'view': 'Style details'},
  'range single day': {'Date range': (dt.date(2026, 10, 6), dt.date(2026, 10, 6)), 'Trend range': (dt.date(2026, 9, 16), dt.date(2026, 9, 20))},
 }
 for name, cfg in cases.items():

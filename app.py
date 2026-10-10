@@ -188,7 +188,6 @@ S = D['settings']
 if D.get('error'):
     st.warning('Could not read your Google Sheet, showing DEMO data instead. Check: Sheet shared as "Anyone with the link", Sheet ID correct, tab names exact. Details: ' + D['error'])
 wash, dry, wip, mm, mp = D['wash'], D['dry'], D['wip'], D['machine'], D['process']
-lplan, smaster = D['plan'], D['smaster']
 RUN_H, BASIS, DAY_START = S['Run_Hours'], S['Plan_Basis'], S['Day_Start_Hour']
 LABELS = calc.hour_labels(DAY_START)
 
@@ -451,72 +450,122 @@ with tabs[3]:
 
 # ================================================================== STYLE EXPLORER
 with tabs[4]:
-    sx_view = st.radio('View', ['Summary', 'Details'], horizontal=True, key='sx_view', label_visibility='collapsed')
-    if sx_view == 'Details':
-        st.caption(f'Lot-wise tracking (Wash plant + Style + PO + Color + Wash type), cumulative till {day:%d %b %Y}. '
-                   'Follows the sidebar Date, Style search and Wash type.')
-        all_plants = st.checkbox('All wash plants', value=False, key='dt_all')
-        w_u = wash if all_plants else wash[wash['Unit'] == unit]
-        p_u = lplan if all_plants else lplan[lplan['Unit'] == unit]
-        w_f = calc.apply_filters(w_u, styles=styles_active, wash_types=wtypes)
-        p_f = calc.apply_filters(p_u, styles=styles_active, wash_types=wtypes)
-        DL = calc.lot_daily(w_f, p_f, day)
-        LS = calc.lot_summary(DL, w_f, smaster)
-        if lplan.empty:
-            st.info('No rows in the Style_Plan tab yet, so plan, variation and achievement show 0 / blank. Add the daily input and output plan per style there.')
-        if smaster.empty:
-            st.info('Style_Master tab is empty or missing: Buyer, CRD, Sewing Unit, Shade Approval and Merchant stay blank.')
-        if LS.empty:
-            st.info('No style-wise data till this date for the current filters.')
+    view = st.radio('View', ['Style summary', 'Style details'], horizontal=True, key='style_view', label_visibility='collapsed')
+    if view == 'Style details':
+        ORD = D['order']
+        st.caption(f"Order-wise details, cumulative till {day:%d %b %Y} hour {until} (sidebar Date and Till hour). The sidebar Style search and Wash type filter apply. "
+                   f"Plan = Daily_Plan tab if the order has rows there, otherwise Order_Qty spread evenly over Plan_Start..Plan_End (output plan shifted {S['Output_Lag_Days']:.0f} day(s)).")
+        if ORD.empty:
+            st.info('No Order_Master data found, so Buyer, PO plan, CRD, Shade and Merchant columns stay blank. Add your orders in the Order_Master tab of the Google Sheet.')
+        T = calc.style_details(wash, ORD, unit, day, until, DAY_START, S['Output_Lag_Days'], D['plan'])
+        if styles_active:
+            T = T[T['Style'].isin(styles_active)]
+        if wtypes:
+            T = T[T['Wash_Type'].isin(wtypes)]
+        f1, f2, f3, f4 = st.columns(4)
+        buyers = sorted(x for x in T['Buyer'].unique() if x)
+        mers = sorted(x for x in T['Merchant'].unique() if x)
+        sews = sorted(x for x in T['Sewing_Unit'].unique() if x)
+        pb = f1.multiselect('Buyer', buyers, default=[], key='det_buyer')
+        pm = f2.multiselect('Merchant', mers, default=[], key='det_mer')
+        ps = f3.multiselect('Sewing unit', sews, default=[], key='det_sew')
+        hide0 = f4.checkbox('Hide orders with no plan and no input yet', value=True, key='det_hide')
+        if pb:
+            T = T[T['Buyer'].isin(pb)]
+        if pm:
+            T = T[T['Merchant'].isin(pm)]
+        if ps:
+            T = T[T['Sewing_Unit'].isin(ps)]
+        if hide0:
+            T = T[(T['Input'] > 0) | (T['Input_Plan'].fillna(0) > 0)]
+        if T.empty:
+            st.info('No orders match.')
         else:
-            buyers = sorted(b_ for b_ in LS['Buyer'].dropna().unique() if b_)
-            fb = st.multiselect('Buyer', buyers, default=[], key='dt_buyer') if buyers else []
-            if fb:
-                LS = LS[LS['Buyer'].isin(fb)]
-            tot = LS[['Input_Plan', 'Input', 'Output_Plan', 'Output', 'WIP', 'RW_WIP', 'Total_WIP', 'Rewash', 'Defect', 'QC_Inspected', 'Reject']].sum()
-            t_achv = tot['Output'] / tot['Output_Plan'] if tot['Output_Plan'] > 0 else np.nan
             c = st.columns(5)
-            kpi(c[0], 'Lots in view', fi(len(LS)), f"Input {fi(tot['Input'])} / plan {fi(tot['Input_Plan'])}")
-            kpi(c[1], 'Actual output', fi(tot['Output']), f"Plan till today: {fi(tot['Output_Plan'])}")
-            kpi(c[2], 'Achievement %', fp(t_achv), 'output actual / output plan', tone_achv(t_achv, S))
-            kpi(c[3], 'Total WIP', fi(tot['Total_WIP']), f"Wash {fi(tot['WIP'])} | Rewash {fi(tot['RW_WIP'])}")
-            kpi(c[4], 'DHU %', fp(tot['Defect'] / tot['QC_Inspected'] if tot['QC_Inspected'] > 0 else np.nan),
-                f"Rewash {fp(tot['Rewash'] / tot['Output'] if tot['Output'] > 0 else np.nan)} | Rejection {fp(tot['Reject'] / tot['Input'] if tot['Input'] > 0 else np.nan)}")
+            kpi(c[0], 'Orders (style / PO / colour)', fi(len(T)), f"{T['Style'].nunique()} styles")
+            kpi(c[1], 'Actual input', fi(T['Input'].sum()), f"Plan {fi(T['Input_Plan'].sum(min_count=1))}")
+            kpi(c[2], 'Actual output', fi(T['Output'].sum()), f"Plan {fi(T['Output_Plan'].sum(min_count=1))}")
+            tot_ach = T['Output'].sum() / T['Output_Plan'].sum() if T['Output_Plan'].sum() > 0 else np.nan
+            kpi(c[3], 'Achievement %', fp(tot_ach), '', tone_achv(tot_ach, S))
+            kpi(c[4], 'Total WIP (incl. rewash)', fi(T['Total_WIP'].sum()), f"Rewash WIP {fi(T['Rewash_WIP'].sum())}")
+            LAB = dict(calc.DETAIL_COLS)
+            V = T.copy()
+            for dc in calc.DETAIL_DATES:
+                V[dc] = V[dc].dt.strftime('%d-%b-%y')
+            cols_ = [c_ for c_, _ in calc.DETAIL_COLS]
+            cfg = {}
+            for c_ in cols_:
+                lab = LAB[c_]
+                if c_ in ('Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'Machines', 'Sewing_Unit', 'Merchant') or c_ in calc.DETAIL_DATES:
+                    try:
+                        cfg[c_] = st.column_config.TextColumn(lab, pinned=c_ in ('Style', 'PO', 'Color'))
+                    except TypeError:
+                        cfg[c_] = st.column_config.TextColumn(lab)
+                elif c_ == 'Achv_Pct':
+                    cfg[c_] = st.column_config.ProgressColumn(lab, format='%.1f', min_value=0, max_value=150)
+                elif c_ in ('Rewash_Pct', 'DHU', 'Reject_Pct', 'Hold_First', 'Hold_Last', 'Approval_Days'):
+                    cfg[c_] = st.column_config.NumberColumn(lab, format='%.1f')
+                else:
+                    cfg[c_] = st.column_config.NumberColumn(lab, format='%d')
             sec('Style details')
-            DV = calc.details_view(LS)
-            cfg = {lbl: num_cfg(lbl) for _, lbl in calc.DETAIL_COLS if lbl in (
-                'Wash Input Plan till today', 'Actual Input', 'Input Variation', 'Wash Output Plan till today', 'Actual Output', 'Output Variation',
-                'WIP', 'Rewash Input', 'Rewash Output', 'Rewash WIP', 'Total WIP', 'Quality Issue (Pcs)', 'Rejection (Pcs)')}
-            for lbl in ('Achievement (%)', 'Rewash (%) till today', 'DHU (%)', 'Rejection (%)'):
-                cfg[lbl] = num_cfg(lbl, '%.1f')
-            for lbl in ('CRD Revision count', '1st cycle Holding time (days)', 'last cycle holding time', 'Approval time (days)'):
-                cfg[lbl] = num_cfg(lbl, '%d')
-            table(DV, cfg, height=460)
-            st.download_button('Download style details (CSV)', DV.to_csv(index=False).encode(), file_name=f'style_details_{day:%Y%m%d}.csv', mime='text/csv')
-            st.caption('Holding time = output date minus input date (days). Approval time = Shade Approval date minus 1st input date. '
-                       'Rejection % = rejection pcs / actual input. Rewash % = rewash input / actual output. DHU % = quality issue pcs / QC inspected.')
-
-            sec('Day-wise tracker (plan, available input / output, WIP)')
-            led = calc.lot_ledger_all(DL)
-            keys = LS[calc.LOT_KEY].drop_duplicates().itertuples(index=False, name=None)
-            lab = lambda k_: f"{k_[1]} | {k_[2] or '-'} | {k_[3] or '-'} | {k_[4] or '-'}" + (f" | {k_[0]}" if all_plants else '')
-            opts = {lab(k_): k_ for k_ in keys}
-            pick_lot = st.selectbox('Style / PO / Color / Wash type', list(opts), key='dt_lot')
-            kk = opts[pick_lot]
-            m_ = np.ones(len(led), dtype=bool)
-            for col_, val_ in zip(calc.LOT_KEY, kk):
-                m_ &= (led[col_] == val_).values
-            table(calc.ledger_view(led[m_]), {n: num_cfg(n) for _, n in calc.LEDGER_COLS if n not in ('Date', 'Month')}, height=360)
-            st.caption("Available plan = today's plan + the balance of earlier days not yet achieved (carries into the next month as well). "
-                       'Opening WIP = cumulative input - cumulative output up to yesterday.')
-            led_all = calc.ledger_view(led)
-            led_all.insert(0, 'Wash plant', led['Unit'].values)
-            led_all.insert(1, 'Style', led['Style'].values)
-            led_all.insert(2, 'PO', led['PO'].values)
-            led_all.insert(3, 'Color', led['Color'].values)
-            led_all.insert(4, 'Wash Type', led['Wash_Type'].values)
-            st.download_button('Download day-wise tracker, all lots (CSV)', led_all.to_csv(index=False).encode(),
-                               file_name=f'style_daywise_{day:%Y%m%d}.csv', mime='text/csv')
+            table(V[cols_], cfg, height=560)
+            dl = T.copy()
+            dl['Machines'] = dl['Machines_Full']
+            dl = dl[cols_].rename(columns={**LAB, 'Input_Var': 'Variation (Input)', 'Output_Var': 'Variation (Output)'})
+            st.download_button('Download style details (CSV)', dl.to_csv(index=False).encode(), file_name=f'style_details_{unit}_{day:%Y%m%d}.csv', mime='text/csv')
+            sec('Daily tracking (day-by-day ledger)')
+            st.caption('Pick an order to see every day: plan, actual, opening WIP + todays input = available, closing WIP. Opening WIP of a day is the previous day closing, so it carries into the next month automatically.')
+            lab_of = {(r_.Style, r_.PO, r_.Color): f"{r_.Style} | {r_.PO} | {r_.Color}" for r_ in T.itertuples()}
+            picks = st.multiselect('Order(s) (Style | PO | Color)', list(lab_of.values()), default=list(lab_of.values())[:1], key='ledger_pick')
+            if picks:
+                keys_ = [k_ for k_, v_ in lab_of.items() if v_ in picks]
+                DPL = calc.order_daily_plan(ORD, D['plan'], unit, S['Output_Lag_Days'])
+                LG = calc.style_ledger(wash, DPL, unit, keys_, day, until)
+                if LG.empty:
+                    st.info('No plan or actual rows for this selection up to the selected date.')
+                else:
+                    srcs = sorted(set(DPL.merge(pd.DataFrame(keys_, columns=calc.KEYS), on=calc.KEYS)['Plan_Source'])) if len(DPL) else []
+                    if srcs:
+                        st.caption('Plan source: ' + ', '.join(srcs))
+                    last_ = LG.iloc[-1]
+                    c = st.columns(5)
+                    kpi(c[0], 'Cum input', fi(last_['Cum_Input']), f"Plan {fi(last_['Cum_Input_Plan'])} | Var {fi(last_['Cum_Input_Var'])}")
+                    kpi(c[1], 'Cum output', fi(last_['Cum_Output']), f"Plan {fi(last_['Cum_Output_Plan'])} | Var {fi(last_['Cum_Output_Var'])}")
+                    kpi(c[2], 'Cum achievement %', fp(last_['Cum_Achv_Pct'] / 100 if pd.notna(last_['Cum_Achv_Pct']) else np.nan), '', tone_achv(last_['Cum_Achv_Pct'] / 100 if pd.notna(last_['Cum_Achv_Pct']) else np.nan, S))
+                    kpi(c[3], 'Closing WIP', fi(last_['Closing_WIP']), f"Opening today {fi(last_['Opening_WIP'])}")
+                    kpi(c[4], 'Total WIP (incl. rewash)', fi(last_['Total_WIP']), f"Rewash WIP {fi(last_['Rewash_WIP'])}")
+                    fig = make_subplots(specs=[[{'secondary_y': True}]])
+                    fig.add_trace(go.Bar(x=LG['Date'], y=LG['Plan_Output'], name='Output plan', marker_color=GREY_L), secondary_y=False)
+                    fig.add_trace(go.Bar(x=LG['Date'], y=LG['Output'], name='Actual output', marker_color=TEAL), secondary_y=False)
+                    fig.add_trace(go.Scatter(x=LG['Date'], y=LG['Input'], name='Actual input', mode='lines', line=dict(color=AMBER, width=2)), secondary_y=False)
+                    fig.add_trace(go.Scatter(x=LG['Date'], y=LG['Closing_WIP'], name='Closing WIP', mode='lines+markers', line=dict(color=NAVY, width=2)), secondary_y=True)
+                    fig.update_yaxes(showgrid=False, secondary_y=True)
+                    show(style_fig(fig, 'Daily plan vs actual and closing WIP', h=360))
+                    LGd = LG.assign(Date=LG['Date'].dt.strftime('%d-%b-%y'))
+                    lcols = ['Date', 'Event', 'Opening_WIP', 'Plan_Input', 'Input', 'Input_Var', 'Available_Input', 'Plan_Output', 'Output', 'Output_Var', 'Achv_Pct',
+                             'Closing_WIP', 'Cum_Input_Plan', 'Cum_Input', 'Cum_Output_Plan', 'Cum_Output', 'Cum_Achv_Pct', 'Rewash', 'Rewash_Output', 'Rewash_WIP', 'Total_WIP', 'Reject']
+                    llab = {'Opening_WIP': 'Opening WIP', 'Plan_Input': 'Input plan', 'Input': 'Actual input', 'Input_Var': 'Input var', 'Available_Input': 'Available input (Opening + todays input)',
+                            'Plan_Output': 'Output plan', 'Output': 'Actual output', 'Output_Var': 'Output var', 'Achv_Pct': 'Achv %', 'Closing_WIP': 'Closing WIP',
+                            'Cum_Input_Plan': 'Cum input plan', 'Cum_Input': 'Cum input', 'Cum_Output_Plan': 'Cum output plan', 'Cum_Output': 'Cum output',
+                            'Cum_Achv_Pct': 'Cum achv %', 'Rewash': 'Rewash in', 'Rewash_Output': 'Rewash out', 'Rewash_WIP': 'Rewash WIP', 'Total_WIP': 'Total WIP', 'Reject': 'Reject'}
+                    lcfg = {c_: st.column_config.NumberColumn(llab.get(c_, c_), format='%.0f' if 'Pct' not in c_ else '%.1f') for c_ in lcols if c_ not in ('Date', 'Event')}
+                    lcfg['Date'] = st.column_config.TextColumn('Date'); lcfg['Event'] = st.column_config.TextColumn('Event')
+                    table(LGd[lcols], lcfg, height=480)
+                    st.download_button('Download daily ledger (CSV)', LGd[lcols].rename(columns=llab).to_csv(index=False).encode(),
+                                       file_name=f'daily_ledger_{unit}_{day:%Y%m%d}.csv', mime='text/csv')
+                    sec('Month-wise summary (opening WIP carried forward)')
+                    LM = calc.ledger_months(LG)
+                    table(LM[['Month', 'Days', 'Opening_WIP', 'Plan_Input', 'Input', 'Input_Var', 'Plan_Output', 'Output', 'Output_Var', 'Achv_Pct', 'Closing_WIP', 'Rewash', 'Rewash_Output', 'Reject']],
+                          {c_: st.column_config.NumberColumn(c_.replace('_', ' '), format='%.0f' if c_ != 'Achv_Pct' else '%.1f') for c_ in LM.columns if c_ not in ('Month',)})
+            with st.expander('How each column is calculated'):
+                st.markdown("""
+- **Plan till today**: Order_Qty x share of Plan_Start..Plan_End elapsed (straight line); output plan is shifted by Output_Lag_Days (Settings).
+- **Variation** = Actual - Plan. **Achievement %** = Actual Output / Output Plan.
+- **WIP** = Actual Input - Actual Output. **Rewash Input** = pcs sent for rewash; **Rewash Output** = pcs back from rewash; **Rewash WIP** = difference. **Total WIP** = WIP + Rewash WIP.
+- **Rewash %** = Rewash Input / Actual Output. **Quality Issue** = defect pcs found at QC. **DHU %** = defect pcs / QC inspected pcs x 100. **Rejection %** = Rejection pcs / Actual Input.
+- **1st cycle holding time** = 1st Output - 1st Input (days, from the hourly log). **last cycle holding time** = last Output - last Input. Dates are production dates.
+- **Approval time** = Shade Approval date - Shade Submit date (or - 1st Output date if no submit date). Machine IDs show the first 6 (full list in the CSV).
+""")
     else:
         st.caption('Cross-date style analysis. Use the Style search in the sidebar to narrow the list (no search = all styles).')
         lo = max(first, last - dt.timedelta(days=13))

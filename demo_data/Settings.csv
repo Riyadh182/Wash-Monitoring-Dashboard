@@ -6,3 +6,4 @@ Target_Pct,0.95
 Alert_Pct,0.8
 Max_Defect_Pct,0.03
 Max_Rewash_Pct,0.02
+Output_Lag_Days,2.0
