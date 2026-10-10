@@ -188,6 +188,7 @@ S = D['settings']
 if D.get('error'):
     st.warning('Could not read your Google Sheet, showing DEMO data instead. Check: Sheet shared as "Anyone with the link", Sheet ID correct, tab names exact. Details: ' + D['error'])
 wash, dry, wip, mm, mp = D['wash'], D['dry'], D['wip'], D['machine'], D['process']
+lplan, smaster = D['plan'], D['smaster']
 RUN_H, BASIS, DAY_START = S['Run_Hours'], S['Plan_Basis'], S['Day_Start_Hour']
 LABELS = calc.hour_labels(DAY_START)
 
@@ -450,57 +451,124 @@ with tabs[3]:
 
 # ================================================================== STYLE EXPLORER
 with tabs[4]:
-    st.caption('Cross-date style analysis. Use the Style search in the sidebar to narrow the list (no search = all styles).')
-    lo = max(first, last - dt.timedelta(days=13))
-    rng = st.date_input('Date range', value=(lo, last), min_value=first, max_value=last, key='style_range')
-    r0, r1 = (rng[0], rng[1]) if isinstance(rng, (tuple, list)) and len(rng) == 2 else (rng if not isinstance(rng, (tuple, list)) else rng[0],) * 2
-    ws_ = calc.apply_filters(wash, unit=unit, d0=r0, d1=r1, styles=styles_active)
-    ds_ = calc.apply_filters(dry, unit=unit, d0=r0, d1=r1, styles=styles_active)
-    SS = calc.style_summary(ws_, ds_)
-    if SS.empty:
-        st.info('No style data in this range.')
+    sx_view = st.radio('View', ['Summary', 'Details'], horizontal=True, key='sx_view', label_visibility='collapsed')
+    if sx_view == 'Details':
+        st.caption(f'Lot-wise tracking (Wash plant + Style + PO + Color + Wash type), cumulative till {day:%d %b %Y}. '
+                   'Follows the sidebar Date, Style search and Wash type.')
+        all_plants = st.checkbox('All wash plants', value=False, key='dt_all')
+        w_u = wash if all_plants else wash[wash['Unit'] == unit]
+        p_u = lplan if all_plants else lplan[lplan['Unit'] == unit]
+        w_f = calc.apply_filters(w_u, styles=styles_active, wash_types=wtypes)
+        p_f = calc.apply_filters(p_u, styles=styles_active, wash_types=wtypes)
+        DL = calc.lot_daily(w_f, p_f, day)
+        LS = calc.lot_summary(DL, w_f, smaster)
+        if lplan.empty:
+            st.info('No rows in the Style_Plan tab yet, so plan, variation and achievement show 0 / blank. Add the daily input and output plan per style there.')
+        if smaster.empty:
+            st.info('Style_Master tab is empty or missing: Buyer, CRD, Sewing Unit, Shade Approval and Merchant stay blank.')
+        if LS.empty:
+            st.info('No style-wise data till this date for the current filters.')
+        else:
+            buyers = sorted(b_ for b_ in LS['Buyer'].dropna().unique() if b_)
+            fb = st.multiselect('Buyer', buyers, default=[], key='dt_buyer') if buyers else []
+            if fb:
+                LS = LS[LS['Buyer'].isin(fb)]
+            tot = LS[['Input_Plan', 'Input', 'Output_Plan', 'Output', 'WIP', 'RW_WIP', 'Total_WIP', 'Rewash', 'Defect', 'QC_Inspected', 'Reject']].sum()
+            t_achv = tot['Output'] / tot['Output_Plan'] if tot['Output_Plan'] > 0 else np.nan
+            c = st.columns(5)
+            kpi(c[0], 'Lots in view', fi(len(LS)), f"Input {fi(tot['Input'])} / plan {fi(tot['Input_Plan'])}")
+            kpi(c[1], 'Actual output', fi(tot['Output']), f"Plan till today: {fi(tot['Output_Plan'])}")
+            kpi(c[2], 'Achievement %', fp(t_achv), 'output actual / output plan', tone_achv(t_achv, S))
+            kpi(c[3], 'Total WIP', fi(tot['Total_WIP']), f"Wash {fi(tot['WIP'])} | Rewash {fi(tot['RW_WIP'])}")
+            kpi(c[4], 'DHU %', fp(tot['Defect'] / tot['QC_Inspected'] if tot['QC_Inspected'] > 0 else np.nan),
+                f"Rewash {fp(tot['Rewash'] / tot['Output'] if tot['Output'] > 0 else np.nan)} | Rejection {fp(tot['Reject'] / tot['Input'] if tot['Input'] > 0 else np.nan)}")
+            sec('Style details')
+            DV = calc.details_view(LS)
+            cfg = {lbl: num_cfg(lbl) for _, lbl in calc.DETAIL_COLS if lbl in (
+                'Wash Input Plan till today', 'Actual Input', 'Input Variation', 'Wash Output Plan till today', 'Actual Output', 'Output Variation',
+                'WIP', 'Rewash Input', 'Rewash Output', 'Rewash WIP', 'Total WIP', 'Quality Issue (Pcs)', 'Rejection (Pcs)')}
+            for lbl in ('Achievement (%)', 'Rewash (%) till today', 'DHU (%)', 'Rejection (%)'):
+                cfg[lbl] = num_cfg(lbl, '%.1f')
+            for lbl in ('CRD Revision count', '1st cycle Holding time (days)', 'last cycle holding time', 'Approval time (days)'):
+                cfg[lbl] = num_cfg(lbl, '%d')
+            table(DV, cfg, height=460)
+            st.download_button('Download style details (CSV)', DV.to_csv(index=False).encode(), file_name=f'style_details_{day:%Y%m%d}.csv', mime='text/csv')
+            st.caption('Holding time = output date minus input date (days). Approval time = Shade Approval date minus 1st input date. '
+                       'Rejection % = rejection pcs / actual input. Rewash % = rewash input / actual output. DHU % = quality issue pcs / QC inspected.')
+
+            sec('Day-wise tracker (plan, available input / output, WIP)')
+            led = calc.lot_ledger_all(DL)
+            keys = LS[calc.LOT_KEY].drop_duplicates().itertuples(index=False, name=None)
+            lab = lambda k_: f"{k_[1]} | {k_[2] or '-'} | {k_[3] or '-'} | {k_[4] or '-'}" + (f" | {k_[0]}" if all_plants else '')
+            opts = {lab(k_): k_ for k_ in keys}
+            pick_lot = st.selectbox('Style / PO / Color / Wash type', list(opts), key='dt_lot')
+            kk = opts[pick_lot]
+            m_ = np.ones(len(led), dtype=bool)
+            for col_, val_ in zip(calc.LOT_KEY, kk):
+                m_ &= (led[col_] == val_).values
+            table(calc.ledger_view(led[m_]), {n: num_cfg(n) for _, n in calc.LEDGER_COLS if n not in ('Date', 'Month')}, height=360)
+            st.caption("Available plan = today's plan + the balance of earlier days not yet achieved (carries into the next month as well). "
+                       'Opening WIP = cumulative input - cumulative output up to yesterday.')
+            led_all = calc.ledger_view(led)
+            led_all.insert(0, 'Wash plant', led['Unit'].values)
+            led_all.insert(1, 'Style', led['Style'].values)
+            led_all.insert(2, 'PO', led['PO'].values)
+            led_all.insert(3, 'Color', led['Color'].values)
+            led_all.insert(4, 'Wash Type', led['Wash_Type'].values)
+            st.download_button('Download day-wise tracker, all lots (CSV)', led_all.to_csv(index=False).encode(),
+                               file_name=f'style_daywise_{day:%Y%m%d}.csv', mime='text/csv')
     else:
-        c = st.columns(4)
-        kpi(c[0], 'Styles in range', fi(len(SS)), f"{r0:%d %b} - {r1:%d %b}")
-        kpi(c[1], 'Wash output', fi(SS['Output'].sum()), 'pcs')
-        top_rw = SS.dropna(subset=['Rewash_Pct']).sort_values('Rewash_Pct', ascending=False)
-        kpi(c[2], 'Highest rewash %', top_rw.iloc[0]['Style'] if len(top_rw) else '–', fp(top_rw.iloc[0]['Rewash_Pct']) if len(top_rw) else '', 'bad' if len(top_rw) and top_rw.iloc[0]['Rewash_Pct'] > S['Max_Rewash_Pct'] else '')
-        top_df = SS.dropna(subset=['Defect_Pct']).sort_values('Defect_Pct', ascending=False)
-        kpi(c[3], 'Highest defect %', top_df.iloc[0]['Style'] if len(top_df) else '–', fp(top_df.iloc[0]['Defect_Pct']) if len(top_df) else '', 'bad' if len(top_df) and top_df.iloc[0]['Defect_Pct'] > S['Max_Defect_Pct'] else '')
-        sec('Style summary')
-        SSd = SS.assign(**{'Defect %': SS['Defect_Pct'] * 100, 'Rewash %': SS['Rewash_Pct'] * 100,
-                           'Dry Defect %': SS['Dry_Defect_Pct'] * 100, 'Dry Rework %': SS['Dry_Rework_Pct'] * 100})
-        cols = ['Style', 'Output', 'Input', 'Defect %', 'Rewash %', 'Machines', 'Days', 'Downtime_Min', 'Dry_Output', 'Dry Defect %', 'Dry Rework %']
-        table(SSd[cols], {'Defect %': num_cfg('Defect %', '%.1f'), 'Rewash %': num_cfg('Rewash %', '%.1f'), 'Dry Defect %': num_cfg('Dry Defect %', '%.1f'),
-                          'Dry Rework %': num_cfg('Dry Rework %', '%.1f'), 'Dry_Output': num_cfg('Dry output (process-pcs)'), 'Downtime_Min': num_cfg('Downtime (min)')}, height=300)
-        st.download_button('Download style summary (CSV)', SSd[cols].to_csv(index=False).encode(), file_name='style_summary.csv', mime='text/csv')
-        pick = st.selectbox('Drill into a style', list(SS['Style']), key='style_pick')
-        wsel, dsel = ws_[ws_['Style'] == pick], ds_[ds_['Style'] == pick]
-        sec(f'Style detail: {pick}')
-        a, b = st.columns(2)
-        with a:
-            gd = wsel.groupby('Date').agg(Output=('Output', 'sum'), Q=('QC_Inspected', 'sum'), D=('Defect', 'sum'), R=('Rewash', 'sum')).reset_index()
-            fig = make_subplots(specs=[[{'secondary_y': True}]])
-            fig.add_trace(go.Bar(x=gd['Date'], y=gd['Output'], name='Output', marker_color=TEAL), secondary_y=False)
-            fig.add_trace(go.Scatter(x=gd['Date'], y=calc.safe_div(gd['D'], gd['Q']) * 100, name='Defect %', mode='lines+markers', line=dict(color=RED)), secondary_y=True)
-            fig.add_trace(go.Scatter(x=gd['Date'], y=calc.safe_div(gd['R'], gd['Output']) * 100, name='Rewash %', mode='lines+markers', line=dict(color=ORANGE)), secondary_y=True)
-            fig.update_yaxes(ticksuffix='%', showgrid=False, rangemode='tozero', secondary_y=True)
-            show(style_fig(fig, 'Daily wash output with defect % and rewash %'))
-        with b:
-            gh = wsel.groupby('Hour_Idx')['Output'].sum().reindex(calc.HOURS).fillna(0)
-            fig = go.Figure(go.Bar(x=[l[:5] for l in LABELS], y=gh.values, marker_color=NAVY, name='Output'))
-            show(style_fig(fig, 'Output by hour of day', legend=False))
-        a, b = st.columns(2)
-        with a:
-            gm = wsel.groupby('Machine_ID').agg(Output=('Output', 'sum'), R=('Rewash', 'sum')).reset_index().sort_values('Output', ascending=False).head(12)
-            fig = go.Figure(go.Bar(x=gm['Output'], y=gm['Machine_ID'], orientation='h', marker_color=TEAL, name='Output'))
-            fig.update_yaxes(autorange='reversed')
-            show(style_fig(fig, 'Top machines for this style (output)', legend=False))
-        with b:
-            gp = dsel.groupby('Process')['Output'].sum().sort_values(ascending=False).reset_index()
-            fig = go.Figure(go.Bar(x=gp['Process'], y=gp['Output'], marker_color=AMBER, name='Output'))
-            fig.update_xaxes(tickangle=-35)
-            show(style_fig(fig, 'Dry process output for this style', legend=False))
+        st.caption('Cross-date style analysis. Use the Style search in the sidebar to narrow the list (no search = all styles).')
+        lo = max(first, last - dt.timedelta(days=13))
+        rng = st.date_input('Date range', value=(lo, last), min_value=first, max_value=last, key='style_range')
+        r0, r1 = (rng[0], rng[1]) if isinstance(rng, (tuple, list)) and len(rng) == 2 else (rng if not isinstance(rng, (tuple, list)) else rng[0],) * 2
+        ws_ = calc.apply_filters(wash, unit=unit, d0=r0, d1=r1, styles=styles_active)
+        ds_ = calc.apply_filters(dry, unit=unit, d0=r0, d1=r1, styles=styles_active)
+        SS = calc.style_summary(ws_, ds_)
+        if SS.empty:
+            st.info('No style data in this range.')
+        else:
+            c = st.columns(4)
+            kpi(c[0], 'Styles in range', fi(len(SS)), f"{r0:%d %b} - {r1:%d %b}")
+            kpi(c[1], 'Wash output', fi(SS['Output'].sum()), 'pcs')
+            top_rw = SS.dropna(subset=['Rewash_Pct']).sort_values('Rewash_Pct', ascending=False)
+            kpi(c[2], 'Highest rewash %', top_rw.iloc[0]['Style'] if len(top_rw) else '–', fp(top_rw.iloc[0]['Rewash_Pct']) if len(top_rw) else '', 'bad' if len(top_rw) and top_rw.iloc[0]['Rewash_Pct'] > S['Max_Rewash_Pct'] else '')
+            top_df = SS.dropna(subset=['Defect_Pct']).sort_values('Defect_Pct', ascending=False)
+            kpi(c[3], 'Highest defect %', top_df.iloc[0]['Style'] if len(top_df) else '–', fp(top_df.iloc[0]['Defect_Pct']) if len(top_df) else '', 'bad' if len(top_df) and top_df.iloc[0]['Defect_Pct'] > S['Max_Defect_Pct'] else '')
+            sec('Style summary')
+            SSd = SS.assign(**{'Defect %': SS['Defect_Pct'] * 100, 'Rewash %': SS['Rewash_Pct'] * 100,
+                               'Dry Defect %': SS['Dry_Defect_Pct'] * 100, 'Dry Rework %': SS['Dry_Rework_Pct'] * 100})
+            cols = ['Style', 'Output', 'Input', 'Defect %', 'Rewash %', 'Machines', 'Days', 'Downtime_Min', 'Dry_Output', 'Dry Defect %', 'Dry Rework %']
+            table(SSd[cols], {'Defect %': num_cfg('Defect %', '%.1f'), 'Rewash %': num_cfg('Rewash %', '%.1f'), 'Dry Defect %': num_cfg('Dry Defect %', '%.1f'),
+                              'Dry Rework %': num_cfg('Dry Rework %', '%.1f'), 'Dry_Output': num_cfg('Dry output (process-pcs)'), 'Downtime_Min': num_cfg('Downtime (min)')}, height=300)
+            st.download_button('Download style summary (CSV)', SSd[cols].to_csv(index=False).encode(), file_name='style_summary.csv', mime='text/csv')
+            pick = st.selectbox('Drill into a style', list(SS['Style']), key='style_pick')
+            wsel, dsel = ws_[ws_['Style'] == pick], ds_[ds_['Style'] == pick]
+            sec(f'Style detail: {pick}')
+            a, b = st.columns(2)
+            with a:
+                gd = wsel.groupby('Date').agg(Output=('Output', 'sum'), Q=('QC_Inspected', 'sum'), D=('Defect', 'sum'), R=('Rewash', 'sum')).reset_index()
+                fig = make_subplots(specs=[[{'secondary_y': True}]])
+                fig.add_trace(go.Bar(x=gd['Date'], y=gd['Output'], name='Output', marker_color=TEAL), secondary_y=False)
+                fig.add_trace(go.Scatter(x=gd['Date'], y=calc.safe_div(gd['D'], gd['Q']) * 100, name='Defect %', mode='lines+markers', line=dict(color=RED)), secondary_y=True)
+                fig.add_trace(go.Scatter(x=gd['Date'], y=calc.safe_div(gd['R'], gd['Output']) * 100, name='Rewash %', mode='lines+markers', line=dict(color=ORANGE)), secondary_y=True)
+                fig.update_yaxes(ticksuffix='%', showgrid=False, rangemode='tozero', secondary_y=True)
+                show(style_fig(fig, 'Daily wash output with defect % and rewash %'))
+            with b:
+                gh = wsel.groupby('Hour_Idx')['Output'].sum().reindex(calc.HOURS).fillna(0)
+                fig = go.Figure(go.Bar(x=[l[:5] for l in LABELS], y=gh.values, marker_color=NAVY, name='Output'))
+                show(style_fig(fig, 'Output by hour of day', legend=False))
+            a, b = st.columns(2)
+            with a:
+                gm = wsel.groupby('Machine_ID').agg(Output=('Output', 'sum'), R=('Rewash', 'sum')).reset_index().sort_values('Output', ascending=False).head(12)
+                fig = go.Figure(go.Bar(x=gm['Output'], y=gm['Machine_ID'], orientation='h', marker_color=TEAL, name='Output'))
+                fig.update_yaxes(autorange='reversed')
+                show(style_fig(fig, 'Top machines for this style (output)', legend=False))
+            with b:
+                gp = dsel.groupby('Process')['Output'].sum().sort_values(ascending=False).reset_index()
+                fig = go.Figure(go.Bar(x=gp['Process'], y=gp['Output'], marker_color=AMBER, name='Output'))
+                fig.update_xaxes(tickangle=-35)
+                show(style_fig(fig, 'Dry process output for this style', legend=False))
 
 # ================================================================== TRENDS
 with tabs[5]:

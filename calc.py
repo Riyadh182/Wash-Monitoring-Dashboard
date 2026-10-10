@@ -3,10 +3,11 @@ import re
 import numpy as np
 import pandas as pd
 
-WASH_NUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Downtime_Min']
+WASH_NUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Downtime_Min', 'Rewash_Output', 'Reject']
 DRY_NUM = ['Input', 'Output', 'Defect', 'Rework', 'Downtime_Min']
 WASH_COLS = ['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'Input', 'Output', 'QC_Inspected',
              'Defect', 'Rewash', 'Downtime_Min', 'Downtime_Reason', 'Remarks']
+WASH_EXTRA = ['PO', 'Color', 'Rewash_Output', 'Reject']   # new columns, added to the right of Remarks in Wash_Log
 DRY_COLS = ['Date', 'Hour', 'Unit', 'Process', 'Style', 'Input', 'Output', 'Defect', 'Rework',
             'Downtime_Min', 'Downtime_Reason', 'Remarks']
 WIP_COLS = ['Date', 'Unit', 'Stage', 'Opening_WIP', 'Remarks']
@@ -21,6 +22,10 @@ _PCT_KEYS = {'Plan_Basis', 'Target_Pct', 'Alert_Pct', 'Max_Defect_Pct', 'Max_Rew
 
 
 # ---------------------------------------------------------------- helpers
+def _clean_str(s):
+    return s.fillna('').astype(str).str.strip().replace({'nan': '', 'None': '', 'NaT': ''})
+
+
 def parse_settings(df):
     s = dict(DEFAULT_SETTINGS)
     if df is not None and len(df) and {'Key', 'Value'} <= set(df.columns):
@@ -104,8 +109,9 @@ def _prep_log(df, cols, nums, key_col, day_start):
 
 
 def prep_wash(df, day_start=8):
-    d, rej = _prep_log(df, WASH_COLS, WASH_NUM, 'Machine_ID', day_start)
-    d['Wash_Type'] = d['Wash_Type'].fillna('').astype(str).str.strip()
+    d, rej = _prep_log(df, WASH_COLS + WASH_EXTRA, WASH_NUM, 'Machine_ID', day_start)
+    for c in ('Wash_Type', 'PO', 'Color'):
+        d[c] = _clean_str(d[c])
     return d, rej
 
 
@@ -395,3 +401,159 @@ def health_checks(w_day, dd_day, mm, mp, unit, until, basis=1.0, rejected_w=None
     out['rejected_wash'] = rejected_w if rejected_w is not None else pd.DataFrame()
     out['rejected_dry'] = rejected_d if rejected_d is not None else pd.DataFrame()
     return out
+
+
+# ================================================================ STYLE DETAILS (lot-wise tracking)
+# One "lot" = Wash plant + Style + PO + Color + Wash type. Plan comes from the Style_Plan tab, buyer/CRD/merchant data from Style_Master,
+# actuals from Wash_Log. Everything is cumulative "till the selected date" so it also works across month-end archive sheets.
+PLAN_COLS = ['Date', 'Unit', 'Style', 'PO', 'Color', 'Wash_Type', 'Input_Plan', 'Output_Plan', 'Remarks']
+SMASTER_COLS = ['Buyer', 'Style', 'PO', 'Color', 'CRD', 'CRD_Revision_Count', 'Updated_CRD', 'Sewing_Unit',
+                'Shade_Approval_Date', 'Merchant']
+LOT_KEY = ['Unit', 'Style', 'PO', 'Color', 'Wash_Type']
+LOT_SUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject', 'Input_Plan', 'Output_Plan']
+
+
+def prep_plan(df):
+    d = _ensure(df, PLAN_COLS)
+    d = d[~d['Remarks'].astype(str).str.upper().str.startswith('EXAMPLE')].copy()
+    d['Date'] = parse_date(d['Date'])
+    for c in ('Input_Plan', 'Output_Plan'):
+        d[c] = to_num(d[c])
+    d = d[d['Date'].notna() & d[['Input_Plan', 'Output_Plan']].notna().any(axis=1)].copy()
+    d[['Input_Plan', 'Output_Plan']] = d[['Input_Plan', 'Output_Plan']].fillna(0)
+    for c in LOT_KEY:
+        d[c] = _clean_str(d[c])
+    return d[d['Style'] != ''].copy()
+
+
+def prep_smaster(df):
+    d = _ensure(df, SMASTER_COLS)
+    for c in ('Buyer', 'Style', 'PO', 'Color', 'Sewing_Unit', 'Merchant'):
+        d[c] = _clean_str(d[c])
+    for c in ('CRD', 'Updated_CRD', 'Shade_Approval_Date'):
+        d[c] = parse_date(d[c].astype(str))
+    d['CRD_Revision_Count'] = to_num(d['CRD_Revision_Count'])
+    d = d[d['Style'] != ''].copy()
+    return d.drop_duplicates(['Style', 'PO', 'Color'], keep='last')[SMASTER_COLS]
+
+
+def lot_daily(w, plan, upto):
+    """Day x lot table (actuals + plan) up to and including `upto`. Rows without a style are left out."""
+    upto = pd.Timestamp(upto)
+    w = w[(w['Date'] <= upto) & (w['Style'] != NO_STYLE)]
+    plan = plan[plan['Date'] <= upto].copy()
+    if len(plan) and len(w):   # plan rows without a wash type take it from the log of the same style/PO/color
+        wt = w[w['Wash_Type'] != ''].drop_duplicates(['Unit', 'Style', 'PO', 'Color']).set_index(['Unit', 'Style', 'PO', 'Color'])['Wash_Type']
+        blank = plan['Wash_Type'] == ''
+        idx = pd.MultiIndex.from_frame(plan.loc[blank, ['Unit', 'Style', 'PO', 'Color']])
+        plan.loc[blank, 'Wash_Type'] = wt.reindex(idx).fillna('').values
+    gw = w.groupby(LOT_KEY + ['Date'])[['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject']].sum().reset_index()
+    gp = plan.groupby(LOT_KEY + ['Date'])[['Input_Plan', 'Output_Plan']].sum().reset_index()
+    d = gw.merge(gp, on=LOT_KEY + ['Date'], how='outer')
+    d[LOT_SUM] = d[LOT_SUM].fillna(0.0)
+    return d.sort_values(LOT_KEY + ['Date']).reset_index(drop=True)
+
+
+def lot_ledger_all(daily):
+    """Day-wise tracker for every lot: available input/output (today's plan + balance carried forward), WIP roll-forward."""
+    d = daily.sort_values(LOT_KEY + ['Date']).copy()
+    if d.empty:
+        return d
+    g = d.groupby(LOT_KEY, sort=False)
+    for c in ('Input_Plan', 'Input', 'Output_Plan', 'Output', 'Rewash', 'Rewash_Output'):
+        d['cum_' + c] = g[c].cumsum()
+        d['prev_' + c] = d['cum_' + c] - d[c]
+    d['In_BF'] = (d['prev_Input_Plan'] - d['prev_Input']).clip(lower=0)
+    d['In_Avail'] = d['Input_Plan'] + d['In_BF']
+    d['In_Var'] = d['Input'] - d['In_Avail']
+    d['Out_BF'] = (d['prev_Output_Plan'] - d['prev_Output']).clip(lower=0)
+    d['Out_Avail'] = d['Output_Plan'] + d['Out_BF']
+    d['Out_Var'] = d['Output'] - d['Out_Avail']
+    d['Open_WIP'] = d['prev_Input'] - d['prev_Output']
+    d['Close_WIP'] = d['cum_Input'] - d['cum_Output']
+    d['RW_WIP'] = d['cum_Rewash'] - d['cum_Rewash_Output']
+    d['Total_WIP'] = d['Close_WIP'] + d['RW_WIP']
+    d['Month'] = d['Date'].dt.strftime('%b-%Y')
+    return d
+
+
+LEDGER_COLS = [('Date', 'Date'), ('Month', 'Month'), ('Input_Plan', 'Input plan (today)'), ('In_BF', 'Input balance b/f'),
+               ('In_Avail', 'Available input plan'), ('Input', 'Actual input'), ('In_Var', 'Input variation'),
+               ('Output_Plan', 'Output plan (today)'), ('Out_BF', 'Output balance b/f'), ('Out_Avail', 'Available output plan'),
+               ('Output', 'Actual output'), ('Out_Var', 'Output variation'), ('Open_WIP', 'Opening WIP'), ('Close_WIP', 'Closing WIP'),
+               ('Rewash', 'Rewash input'), ('Rewash_Output', 'Rewash output'), ('RW_WIP', 'Rewash WIP'), ('Total_WIP', 'Total WIP'),
+               ('Defect', 'Quality issue (pcs)'), ('Reject', 'Rejection (pcs)')]
+
+
+def ledger_view(led):
+    v = led[[a for a, _ in LEDGER_COLS]].copy()
+    v['Date'] = v['Date'].dt.strftime('%d-%b-%y')
+    return v.rename(columns=dict(LEDGER_COLS))
+
+
+def _days(a, b):
+    out = (b - a).dt.days
+    return out.where(out >= 0)
+
+
+def lot_summary(daily, w, sm):
+    """One row per lot, cumulative till the last date inside `daily`. Column order of the report is set in details_view()."""
+    if daily.empty:
+        return pd.DataFrame()
+    g = daily.groupby(LOT_KEY)[LOT_SUM].sum()
+    for col, tag in (('Input', 'In'), ('Output', 'Out')):
+        x = daily[daily[col] > 0].groupby(LOT_KEY)['Date']
+        g['First_' + tag] = x.min()
+        g['Last_' + tag] = x.max()
+    g = g.reset_index()
+    wl = w[(w['Style'] != NO_STYLE) & ((w['Input'] > 0) | (w['Output'] > 0)) & (w['Date'] <= daily['Date'].max())]
+    mach = wl.groupby(LOT_KEY)['Machine_ID'].agg(lambda s: ', '.join(sorted(set(s)))).rename('Machine_IDs').reset_index()
+    g = g.merge(mach, on=LOT_KEY, how='left')
+    g['Machine_IDs'] = g['Machine_IDs'].fillna('')
+    m1 = g[['Style', 'PO', 'Color']].merge(sm, on=['Style', 'PO', 'Color'], how='left')
+    style_only = sm[(sm['PO'] == '') & (sm['Color'] == '')].drop(columns=['PO', 'Color']).drop_duplicates('Style')
+    m2 = g[['Style']].merge(style_only, on='Style', how='left')
+    for c in [c for c in SMASTER_COLS if c not in ('Style', 'PO', 'Color')]:
+        ok = m1[c].notna()
+        if c in ('Buyer', 'Sewing_Unit', 'Merchant'):
+            ok &= m1[c].astype(str) != ''
+        g[c] = m1[c].where(ok, m2[c]).values
+    g['In_Var'] = g['Input'] - g['Input_Plan']
+    g['Out_Var'] = g['Output'] - g['Output_Plan']
+    g['Achv'] = safe_div(g['Output'], g['Output_Plan'])
+    g['WIP'] = g['Input'] - g['Output']
+    g['RW_WIP'] = g['Rewash'] - g['Rewash_Output']
+    g['Total_WIP'] = g['WIP'] + g['RW_WIP']
+    g['RW_Pct'] = safe_div(g['Rewash'], g['Output'])
+    g['DHU'] = safe_div(g['Defect'], g['QC_Inspected'])
+    g['Rej_Pct'] = safe_div(g['Reject'], g['Input'])
+    g['Hold1'] = _days(g['First_In'], g['First_Out'])
+    g['HoldL'] = _days(g['Last_In'], g['Last_Out'])
+    g['Approval_Days'] = _days(g['First_In'], g['Shade_Approval_Date'])
+    return g.sort_values(['Unit', 'Buyer', 'Style', 'PO', 'Color'], na_position='last').reset_index(drop=True)
+
+
+# (internal column, label shown in the report) - this is the exact column sequence requested for the Details view
+DETAIL_COLS = [('Unit', 'Wash plant'), ('Buyer', 'Buyer'), ('Style', 'Style'), ('PO', 'PO'), ('Color', 'Color'), ('Wash_Type', 'Wash Type'),
+               ('CRD', 'CRD'), ('CRD_Revision_Count', 'CRD Revision count'), ('Updated_CRD', 'Updated CRD'),
+               ('Machine_IDs', 'Machine IDs (Used for that style)'), ('Sewing_Unit', 'Sewing Unit'),
+               ('Input_Plan', 'Wash Input Plan till today'), ('Input', 'Actual Input'), ('In_Var', 'Input Variation'),
+               ('Output_Plan', 'Wash Output Plan till today'), ('Output', 'Actual Output'), ('Out_Var', 'Output Variation'),
+               ('Achv', 'Achievement (%)'), ('WIP', 'WIP'), ('Rewash', 'Rewash Input'), ('Rewash_Output', 'Rewash Output'),
+               ('RW_WIP', 'Rewash WIP'), ('Total_WIP', 'Total WIP'), ('RW_Pct', 'Rewash (%) till today'),
+               ('Defect', 'Quality Issue (Pcs)'), ('DHU', 'DHU (%)'), ('Reject', 'Rejection (Pcs)'), ('Rej_Pct', 'Rejection (%)'),
+               ('Hold1', '1st cycle Holding time (days)'), ('First_In', '1st input date'), ('First_Out', '1st Output date'),
+               ('HoldL', 'last cycle holding time'), ('Last_In', 'last input date'), ('Last_Out', 'last output date'),
+               ('Shade_Approval_Date', 'Shade Approval date'), ('Approval_Days', 'Approval time (days)'),
+               ('Merchant', 'Responsible Merchant Name')]
+_DATE_COLS = ['CRD', 'Updated_CRD', 'First_In', 'First_Out', 'Last_In', 'Last_Out', 'Shade_Approval_Date']
+_PCT_COLS = ['Achv', 'RW_Pct', 'DHU', 'Rej_Pct']
+
+
+def details_view(summary):
+    v = summary[[a for a, _ in DETAIL_COLS]].copy()
+    for c in _DATE_COLS:
+        v[c] = v[c].dt.strftime('%d-%b-%y').fillna('')
+    for c in _PCT_COLS:
+        v[c] = (v[c] * 100).round(1)
+    return v.rename(columns=dict(DETAIL_COLS))

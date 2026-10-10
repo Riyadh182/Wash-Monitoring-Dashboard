@@ -5,8 +5,10 @@ import streamlit as st
 import calc
 
 DEMO_DIR = pathlib.Path(__file__).parent / 'demo_data'
-LOGS = {'wash': 'Wash_Log', 'dry': 'Dry_Log', 'wip': 'WIP_Log'}
-MASTERS = {'machine': 'Master_Machine', 'process': 'Master_Process', 'settings': 'Settings'}
+LOGS = {'wash': 'Wash_Log', 'dry': 'Dry_Log', 'wip': 'WIP_Log', 'plan': 'Style_Plan'}      # read from current + archive sheets
+MASTERS = {'machine': 'Master_Machine', 'process': 'Master_Process', 'settings': 'Settings', 'smaster': 'Style_Master'}   # current sheet only
+# Tabs added later: if the tab is missing (or Google returns some other tab instead) they load as empty, the rest of the app keeps working.
+OPTIONAL = {'plan': {'Input_Plan', 'Output_Plan'}, 'smaster': {'Style', 'Buyer'}}
 
 
 def secrets_ready():
@@ -58,18 +60,29 @@ def _from_sheets():
         reader = lambda sid, t, _c={}: _read_ws(_c.setdefault(sid, gc.open_by_key(sid)), t)
     else:                                  # public link mode (default)
         reader = _read_public
+    def read(sid, k, t):
+        if k not in OPTIONAL:
+            return reader(sid, t)
+        try:
+            df = reader(sid, t)
+        except Exception:
+            return pd.DataFrame()
+        return df if OPTIONAL[k] <= set(df.columns) else pd.DataFrame()
     for sid in cur + arc:
         for k, t in LOGS.items():
-            raw[k].append(reader(sid, t))
+            raw[k].append(read(sid, k, t))
     for sid in cur:                        # masters/settings only from the CURRENT files
         for k, t in MASTERS.items():
-            raw[k].append(reader(sid, t))
+            raw[k].append(read(sid, k, t))
     return {k: (pd.concat(v, ignore_index=True) if v else pd.DataFrame()) for k, v in raw.items()}
 
 
 def _from_demo():
-    return {k: pd.read_csv(DEMO_DIR / f'{t}.csv', dtype=str, keep_default_na=False)
-            for k, t in {**LOGS, **MASTERS}.items()}
+    out = {}
+    for k, t in {**LOGS, **MASTERS}.items():
+        f = DEMO_DIR / f'{t}.csv'
+        out[k] = pd.read_csv(f, dtype=str, keep_default_na=False) if f.exists() else pd.DataFrame()
+    return out
 
 
 @st.cache_data(ttl=60, show_spinner='Loading data...')
@@ -88,4 +101,5 @@ def load_all(use_demo=False):
     dry, rej_d = calc.prep_dry(raw['dry'], ds)
     return dict(settings=settings, wash=wash, dry=dry, wip=calc.prep_wip(raw['wip']),
                 machine=calc.prep_machine(raw['machine']), process=calc.prep_process(raw['process']),
+                plan=calc.prep_plan(raw['plan']), smaster=calc.prep_smaster(raw['smaster']),
                 rej_w=rej_w, rej_d=rej_d, demo=demo, error=error)
