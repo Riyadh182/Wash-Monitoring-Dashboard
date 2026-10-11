@@ -10,9 +10,10 @@ WASH_COLS = ['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'PO', '
 DRY_COLS = ['Date', 'Hour', 'Unit', 'Process', 'Style', 'PO', 'Color', 'Input', 'Output', 'Defect', 'Rework',
             'Downtime_Min', 'Downtime_Reason', 'Remarks']
 ORDER_COLS = ['Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'CRD', 'CRD_Revisions', 'Updated_CRD', 'Sewing_Unit',
-              'Order_Qty', 'Plan_Start', 'Plan_End', 'Shade_Submit_Date', 'Shade_Approval_Date', 'Merchant', 'Remarks']
+              'Order_Qty', 'Plan_Start', 'Plan_End', 'Shade_Submit_Date', 'Shade_Approval_Date', 'Merchant', 'Prior_Input', 'Prior_Output', 'Remarks']
 PLAN_COLS = ['Date', 'Wash_Plant', 'Style', 'PO', 'Color', 'Plan_Input', 'Plan_Output']
 KEYS = ['Style', 'PO', 'Color']
+BALANCE_TOL = 0.02
 NO_PO, NO_COLOR = '(no PO)', '(no color)'
 WIP_COLS = ['Date', 'Unit', 'Stage', 'Opening_WIP', 'Remarks']
 MACHINE_COLS = ['Unit', 'Machine_ID', 'Type', 'Plan_per_hr', 'Active']
@@ -58,20 +59,32 @@ def to_num(s):
     return pd.to_numeric(s.astype(str).str.replace(',', '', regex=False).str.strip(), errors='coerce')
 
 
+def intern(s):
+    """Share one string object per distinct value (big memory saving on repeated text columns)."""
+    u = s.unique()
+    return s.map(dict(zip(u, u)))
+
+
 def parse_date(s):
-    num = pd.to_numeric(s, errors='coerce')
+    s = pd.Series(s)
+    u = pd.Series(s.unique())
+    num = pd.to_numeric(u, errors='coerce')
     out = pd.to_datetime(num, unit='D', origin='1899-12-30', errors='coerce')
     mask = out.isna()
     if mask.any():
         out = out.copy()
-        out[mask] = pd.to_datetime(s[mask].astype(str).str.strip(), errors='coerce', format='mixed')
-    return out.dt.normalize()
+        out[mask] = pd.to_datetime(u[mask].astype(str).str.strip(), errors='coerce', format='mixed')
+    m = dict(zip(u, out.dt.normalize()))
+    r = s.map(m)
+    return pd.to_datetime(r)
 
 
 def hour_idx(series, day_start):
-    start = pd.to_numeric(series.astype(str).str.extract(r'^\s*(\d{1,2})')[0], errors='coerce')
+    u = pd.Series(series.unique())
+    start = pd.to_numeric(u.astype(str).str.extract(r'^\s*(\d{1,2})')[0], errors='coerce')
     start = start.where(start <= 23)
-    return ((start - int(day_start)) % 24) + 1
+    idx = ((start - int(day_start)) % 24) + 1
+    return series.map(dict(zip(u, idx))).astype(float)
 
 
 def _ensure(df, cols):
@@ -99,6 +112,8 @@ def _prep_log(df, cols, nums, key_col, day_start):
     d.loc[d['Style'] == '', 'Style'] = NO_STYLE
     d.loc[d['PO'] == '', 'PO'] = NO_PO
     d.loc[d['Color'] == '', 'Color'] = NO_COLOR
+    for c in ('Unit', key_col, 'Style', 'PO', 'Color', 'Downtime_Reason', 'Hour'):
+        d[c] = intern(d[c].astype(str))
     d[nums] = d[nums].fillna(0)
     bad = d['Date'].isna() | d['Hour_Idx'].isna() | (d[key_col] == '')
     rejected = d[bad].copy()
@@ -417,6 +432,8 @@ def prep_order(df):
         d[c] = parse_date(d[c])
     d['Order_Qty'] = to_num(d['Order_Qty'])
     d['CRD_Revisions'] = to_num(d['CRD_Revisions'])
+    d['Prior_Input'] = to_num(d['Prior_Input']).fillna(0)
+    d['Prior_Output'] = to_num(d['Prior_Output']).fillna(0)
     return d.drop_duplicates(['Wash_Plant'] + KEYS).reset_index(drop=True)
 
 
@@ -467,6 +484,14 @@ def style_details(w, order, unit, asof, until, day_start=8.0, lag_days=2.0, plan
         t[c] = pd.to_numeric(t[c], errors='coerce')
     for c in sums:
         t[c] = pd.to_numeric(t[c], errors='coerce').fillna(0)
+    for c in ['Prior_Input', 'Prior_Output']:
+        t[c] = pd.to_numeric(t[c], errors='coerce').fillna(0)
+    if len(d):
+        r3 = d[d['Date'] > asof - pd.Timedelta(days=3)].groupby(KEYS)['Output'].sum().rename('Rate3').reset_index()
+        t = t.merge(r3, on=KEYS, how='left')
+    else:
+        t['Rate3'] = np.nan
+    t['Rate3'] = t['Rate3'].fillna(0) / 3.0
     for c in ['Buyer', 'Sewing_Unit', 'Merchant', 'Machines', 'Machines_Full', 'Wash_Type', 'Log_Wash_Type']:
         t[c] = t[c].fillna('').astype(str).replace({'nan': ''})
     t['Wash_Type'] = t['Wash_Type'].where(t['Wash_Type'] != '', t['Log_Wash_Type'])
@@ -476,22 +501,29 @@ def style_details(w, order, unit, asof, until, day_start=8.0, lag_days=2.0, plan
     cp = cum_plan_at(dp, asof, until)
     t = t.merge(cp, on=KEYS, how='left')
     t['Plan_Source'] = t['Plan_Source'].fillna('')
+    t['Rewash_Pct'] = safe_div(t['Rewash'], t['Output']) * 100          # ratios on logged quantities
+    t['DHU'] = safe_div(t['Defect'], t['QC_Inspected']) * 100
+    t['Reject_Pct'] = safe_div(t['Reject'], t['Input']) * 100
+    t['Input'] = t['Input'] + t['Prior_Input']                           # totals include pcs processed before logging started
+    t['Output'] = t['Output'] + t['Prior_Output']
     t['Input_Var'] = t['Input'] - t['Input_Plan']
     t['Output_Var'] = t['Output'] - t['Output_Plan']
     t['Achv_Pct'] = safe_div(t['Output'], t['Output_Plan']) * 100
     t['WIP'] = t['Input'] - t['Output']
     t['Rewash_WIP'] = t['Rewash'] - t['Rewash_Output']
     t['Total_WIP'] = t['WIP'] + t['Rewash_WIP']
-    t['Rewash_Pct'] = safe_div(t['Rewash'], t['Output']) * 100
-    t['DHU'] = safe_div(t['Defect'], t['QC_Inspected']) * 100
-    t['Reject_Pct'] = safe_div(t['Reject'], t['Input']) * 100
+    t['Balance'] = (t['Order_Qty'] - t['Output']).clip(lower=0)
+    t['Balance'] = t['Balance'].where(t['Balance'] > BALANCE_TOL * t['Order_Qty'].fillna(0), 0.0)     # ship tolerance: <2% short counts as delivered
+    t['Pending_Input'] = (t['Order_Qty'] - t['Input']).clip(lower=0)
+    t['Eff_CRD'] = t['Updated_CRD'].where(t['Updated_CRD'].notna(), t['CRD'])
+    t['Days_to_CRD'] = (t['Eff_CRD'] - asof).dt.days
     day = pd.Timedelta(days=1)
     t['Hold_First'] = (t['First_Out'] - t['First_In']) / day
     t['Hold_Last'] = (t['Last_Out'] - t['Last_In']) / day
     start = t['Shade_Submit_Date'].where(t['Shade_Submit_Date'].notna(), t['First_Out_Date'])
     t['Approval_Days'] = (t['Shade_Approval_Date'] - start) / day
     t = t.sort_values(['Output', 'Input'], ascending=False).reset_index(drop=True)
-    return t[[c for c, _ in DETAIL_COLS] + ['Machines_Full', 'Plan_Source']]
+    return t[[c for c, _ in DETAIL_COLS] + ['Machines_Full', 'Plan_Source', 'Order_Qty', 'Prior_Input', 'Prior_Output', 'Balance', 'Pending_Input', 'Eff_CRD', 'Days_to_CRD', 'Rate3', 'QC_Inspected']]
 
 
 # ---------------------------------------------------------------- daily plan and daily ledger
@@ -553,7 +585,7 @@ def cum_plan_at(dp, asof, until):
 LEDGER_NUM = ['Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject']
 
 
-def style_ledger(w, dp, unit, keys, asof, until):
+def style_ledger(w, dp, unit, keys, asof, until, prior_in=0.0, prior_out=0.0):
     """Day-by-day tracking for Style/PO/Color keys up to (asof, until).
     Opening WIP of a day = previous day's closing WIP, so it carries across months."""
     asof = pd.Timestamp(asof).normalize()
@@ -572,13 +604,13 @@ def style_ledger(w, dp, unit, keys, asof, until):
     L = pd.DataFrame(index=pd.date_range(start, asof, freq='D')).join(act).join(pl)
     for c in LEDGER_NUM + ['Plan_Input', 'Plan_Output']:
         L[c] = pd.to_numeric(L[c], errors='coerce').fillna(0.0)
-    L['Closing_WIP'] = (L['Input'] - L['Output']).cumsum()
-    L['Opening_WIP'] = L['Closing_WIP'].shift(1).fillna(0.0)
+    L['Closing_WIP'] = (L['Input'] - L['Output']).cumsum() + (prior_in - prior_out)
+    L['Opening_WIP'] = L['Closing_WIP'].shift(1).fillna(prior_in - prior_out)
     L['Available_Input'] = L['Opening_WIP'] + L['Input']
     L['Input_Var'] = L['Input'] - L['Plan_Input']
     L['Output_Var'] = L['Output'] - L['Plan_Output']
-    L['Cum_Input_Plan'] = L['Plan_Input'].cumsum(); L['Cum_Input'] = L['Input'].cumsum()
-    L['Cum_Output_Plan'] = L['Plan_Output'].cumsum(); L['Cum_Output'] = L['Output'].cumsum()
+    L['Cum_Input_Plan'] = L['Plan_Input'].cumsum(); L['Cum_Input'] = L['Input'].cumsum() + prior_in
+    L['Cum_Output_Plan'] = L['Plan_Output'].cumsum(); L['Cum_Output'] = L['Output'].cumsum() + prior_out
     L['Cum_Input_Var'] = L['Cum_Input'] - L['Cum_Input_Plan']
     L['Cum_Output_Var'] = L['Cum_Output'] - L['Cum_Output_Plan']
     L['Achv_Pct'] = safe_div(L['Output'], L['Plan_Output']) * 100
@@ -611,3 +643,221 @@ def ledger_months(L):
     g['Output_Var'] = g['Output'] - g['Plan_Output']
     g['Achv_Pct'] = safe_div(g['Output'], g['Plan_Output']) * 100
     return g
+
+
+# ================================================================ masters: unit capacity and allotment
+UNIT_COLS = ['Wash_Plant', 'Wet_Capacity_Day', 'Dry_Capacity_Day']
+ALLOT_COLS = ['Date', 'Unit', 'Resource', 'Style', 'PO', 'Color', 'Plan_Qty']
+
+
+def prep_unit_master(df):
+    d = _ensure(df, UNIT_COLS)
+    d['Wash_Plant'] = d['Wash_Plant'].fillna('').astype(str).str.strip()
+    d['Wet_Capacity_Day'] = to_num(d['Wet_Capacity_Day'])
+    d['Dry_Capacity_Day'] = to_num(d['Dry_Capacity_Day'])
+    return d[d['Wash_Plant'] != ''].drop_duplicates('Wash_Plant').reset_index(drop=True)
+
+
+def prep_alloc(df):
+    d = _ensure(df, ALLOT_COLS)
+    d['Date'] = parse_date(d['Date'])
+    d['Plan_Qty'] = to_num(d['Plan_Qty']).fillna(0)
+    for c in ['Unit', 'Resource', 'Style', 'PO', 'Color']:
+        d[c] = intern(d[c].fillna('').astype(str).str.strip())
+    return d[d['Date'].notna() & (d['Resource'] != '')].reset_index(drop=True)
+
+
+def unit_capacity(um, mm, mp, units, run_hours=24.0, basis=1.0):
+    """Wet / dry capacity per day per plant. Unit_Master wins; otherwise wet = sum of machine capacity, dry = n/a."""
+    rows = []
+    for u in units:
+        m = um[um['Wash_Plant'] == u] if len(um) else um
+        mach = float((mm[(mm['Unit'] == u) & (mm['Active'] != 'N')]['Plan_per_hr'] * run_hours * basis).sum())
+        wet = float(m['Wet_Capacity_Day'].iloc[0]) if len(m) and pd.notna(m['Wet_Capacity_Day'].iloc[0]) else mach
+        dry = float(m['Dry_Capacity_Day'].iloc[0]) if len(m) and pd.notna(m['Dry_Capacity_Day'].iloc[0]) else np.nan
+        rows.append(dict(Wash_Plant=u, Wet_Capacity_Day=wet, Dry_Capacity_Day=dry, Machine_Capacity_Day=mach,
+                         Process_Capacity_Sum=float(mp[(mp['Unit'] == u) & (mp['Active'] != 'N')]['Capacity_per_day'].sum())))
+    return pd.DataFrame(rows)
+
+
+# ================================================================ portfolio (all plants)
+def all_status(w, order, plan, units, asof, until, day_start=8.0, lag_days=2.0):
+    fr = [style_details(w, order, u, asof, until, day_start, lag_days, plan) for u in units]
+    fr = [f for f in fr if len(f)]
+    if not fr:
+        return pd.DataFrame()
+    S = pd.concat(fr, ignore_index=True)
+    return S
+
+
+SUM_COLS = ['Order_Qty', 'Input_Plan', 'Input', 'Output_Plan', 'Output', 'WIP', 'Rewash', 'Rewash_Output', 'Rewash_WIP', 'Total_WIP',
+            'Balance', 'Pending_Input', 'Defect', 'QC_Inspected', 'Reject']
+
+
+def group_summary(S, by, horizon=7):
+    if S.empty:
+        return pd.DataFrame()
+    d = S.copy()
+    d['Crisis'] = ((d['Balance'] > 0) & (d['Days_to_CRD'] <= horizon)).astype(int)
+    d['Crisis_Pcs'] = np.where(d['Crisis'] == 1, d['Balance'], 0.0)
+    d['_nc'] = d['Eff_CRD'].where(d['Balance'] > 0)
+    g = d.groupby(by, dropna=False).agg(Orders=('Style', 'size'), Styles=('Style', 'nunique'), Next_CRD=('_nc', 'min'),
+                                        Crisis_Orders=('Crisis', 'sum'), Crisis_Pcs=('Crisis_Pcs', 'sum'),
+                                        **{c: (c, 'sum') for c in SUM_COLS}).reset_index()
+    g['Input_Var'] = g['Input'] - g['Input_Plan']
+    g['Output_Var'] = g['Output'] - g['Output_Plan']
+    g['Input_Achv_Pct'] = safe_div(g['Input'], g['Input_Plan']) * 100
+    g['Achv_Pct'] = safe_div(g['Output'], g['Output_Plan']) * 100
+    g['Rewash_Pct'] = safe_div(g['Rewash'], g['Output']) * 100
+    g['DHU'] = safe_div(g['Defect'], g['QC_Inspected']) * 100
+    g['Reject_Pct'] = safe_div(g['Reject'], g['Input']) * 100
+    return g.sort_values('Total_WIP', ascending=False).reset_index(drop=True)
+
+
+def crd_summary(S, asof, freq='date'):
+    if S.empty:
+        return pd.DataFrame()
+    d = S[S['Eff_CRD'].notna()].copy()
+    if freq == 'week':
+        d['CRD_Group'] = (d['Eff_CRD'] - pd.to_timedelta(d['Eff_CRD'].dt.weekday, unit='D')).dt.normalize()
+    else:
+        d['CRD_Group'] = d['Eff_CRD']
+    g = group_summary(d, ['CRD_Group'])
+    g['Days_to_CRD'] = (g['CRD_Group'] - pd.Timestamp(asof).normalize()).dt.days
+    g['Status'] = np.where(g['Balance'] <= 0, 'Delivered',
+                   np.where(g['Days_to_CRD'] < 0, 'Overdue', np.where(g['Days_to_CRD'] <= 7, 'Next 7 days', 'Later')))
+    return g.sort_values('CRD_Group').reset_index(drop=True)
+
+
+def crisis_table(S, horizon=7):
+    """Orders with balance still to deliver whose CRD is overdue or within `horizon` days."""
+    if S.empty:
+        return pd.DataFrame()
+    c = S[(S['Eff_CRD'].notna()) & (S['Balance'] > 0) & (S['Days_to_CRD'] <= horizon)].copy()
+    if c.empty:
+        return c
+    days = c['Days_to_CRD'].clip(lower=1)
+    c['Required_Rate'] = c['Balance'] / days
+    c['Can_Finish'] = (c['Days_to_CRD'] > 0) & (c['Rate3'] * c['Days_to_CRD'] >= c['Balance'])
+    c['Risk'] = np.where(c['Days_to_CRD'] < 0, 'Overdue', np.where((c['Days_to_CRD'] <= 3) | ~c['Can_Finish'], 'Critical', 'Watch'))
+    c['Where_Stuck'] = np.where(c['Total_WIP'] >= 0.5 * c['Balance'], 'In wash (WIP)', np.where(c['Pending_Input'] > 0.5 * c['Balance'], 'Not yet received', 'Mixed'))
+    c['_r'] = c['Risk'].map({'Overdue': 0, 'Critical': 1, 'Watch': 2})
+    return c.sort_values(['_r', 'Days_to_CRD', 'Balance'], ascending=[True, True, False]).drop(columns='_r').reset_index(drop=True)
+
+
+# ================================================================ plant daily receive / delivery and WIP
+def plant_daily(w, wip, unit, d0, d1):
+    d0, d1 = pd.Timestamp(d0).normalize(), pd.Timestamp(d1).normalize()
+    d = w[(w['Unit'] == unit) & (w['Date'] >= d0) & (w['Date'] <= d1)]
+    cols = ['Input', 'Output', 'Rewash', 'Rewash_Output']
+    g = d.groupby('Date')[cols].sum() if len(d) else pd.DataFrame(columns=cols, dtype=float)
+    idx = pd.date_range(d0, d1, freq='D')
+    g = g.reindex(idx).fillna(0.0)
+    phys = wip[(wip['Unit'] == unit) & (wip['Stage'].str.upper() == 'WASH')].groupby('Date')['Opening_WIP'].sum()
+    op, cl, prev = [], [], 0.0
+    for dt_ in idx:
+        o = float(phys[dt_]) if dt_ in phys.index else prev
+        c = o + g.loc[dt_, 'Input'] - g.loc[dt_, 'Output']
+        op.append(o); cl.append(c); prev = c
+    g['Opening_WIP'], g['Closing_WIP'] = op, cl
+    g['Change'] = g['Closing_WIP'] - g['Opening_WIP']
+    g.index.name = 'Date'
+    g = g.reset_index()
+    g.insert(1, 'Wash_Plant', unit)
+    return g[['Date', 'Wash_Plant', 'Opening_WIP', 'Input', 'Output', 'Closing_WIP', 'Change', 'Rewash', 'Rewash_Output']]
+
+
+def all_plant_daily(w, wip, units, d0, d1):
+    fr = [plant_daily(w, wip, u, d0, d1) for u in units]
+    return pd.concat(fr, ignore_index=True) if fr else pd.DataFrame()
+
+
+def wip_compare(pdaily, asof):
+    asof = pd.Timestamp(asof).normalize(); y = asof - pd.Timedelta(days=1)
+    t = pdaily[pdaily['Date'] == asof].set_index('Wash_Plant')
+    yv = pdaily[pdaily['Date'] == y].set_index('Wash_Plant')
+    out = pd.DataFrame({'WIP_Yesterday': yv['Closing_WIP'], 'Receive_Today': t['Input'], 'Delivery_Today': t['Output'], 'WIP_Today': t['Closing_WIP']})
+    out['WIP_Yesterday'] = out['WIP_Yesterday'].fillna(t['Opening_WIP'])
+    out['Change'] = out['WIP_Today'] - out['WIP_Yesterday']
+    out['Change_Pct'] = safe_div(out['Change'], out['WIP_Yesterday']) * 100
+    out = out.reset_index().rename(columns={'index': 'Wash_Plant'})
+    return out
+
+
+# ================================================================ capacity justification (machine / process, day / month)
+def _avail_hours(dates, asof, until, run_hours):
+    return np.where(dates == asof, until, run_hours).astype(float)
+
+
+def resource_daily(log, alloc, cap_hr, unit, res_col, d0, d1, asof, until, run_hours=24.0):
+    """One row per (Date, resource): capacity, allotted plan, actual, downtime. cap_hr: Series resource -> pcs per hour."""
+    asof = pd.Timestamp(asof).normalize()
+    d0, d1 = pd.Timestamp(d0).normalize(), min(pd.Timestamp(d1).normalize(), asof)
+    if d1 < d0:
+        return pd.DataFrame()
+    d = log[(log['Unit'] == unit) & (log['Date'] >= d0) & ((log['Date'] < asof) | ((log['Date'] == asof) & (log['Hour_Idx'] <= until)))
+            & (log['Date'] <= d1)]
+    d = d.assign(_sty=(d['Style'] != NO_STYLE).astype(int), _hrs=1)
+    extra = 'Rewash' if 'Rewash' in d.columns else 'Rework'
+    qc = 'QC_Inspected' if 'QC_Inspected' in d.columns else None
+    agg = dict(Output=('Output', 'sum'), Input=('Input', 'sum'), Defect=('Defect', 'sum'), Rework=(extra, 'sum'),
+               Downtime_Min=('Downtime_Min', 'sum'), Hours_Logged=('_hrs', 'sum'), Hours_Styled=('_sty', 'sum'))
+    if qc:
+        agg['QC_Inspected'] = (qc, 'sum')
+    g = d.groupby(['Date', res_col]).agg(**agg).reset_index() if len(d) else pd.DataFrame(columns=['Date', res_col] + list(agg))
+    dates = pd.date_range(d0, d1, freq='D')
+    full = pd.MultiIndex.from_product([dates, list(cap_hr.index)], names=['Date', res_col]).to_frame(index=False)
+    t = full.merge(g, on=['Date', res_col], how='left')
+    for c in list(agg):
+        t[c] = pd.to_numeric(t[c], errors='coerce').fillna(0)
+    t['Cap_hr'] = t[res_col].map(cap_hr).astype(float)
+    t['Avail_Hours'] = _avail_hours(t['Date'].values, asof.to_datetime64(), until, run_hours)
+    t['Capacity'] = t['Cap_hr'] * t['Avail_Hours']
+    a = alloc[(alloc['Unit'] == unit) & (alloc['Date'] >= d0) & (alloc['Date'] <= d1)] if alloc is not None and len(alloc) else pd.DataFrame()
+    t['Derived'] = t['Cap_hr'] * t['Hours_Styled']
+    if len(a):
+        ag = a.groupby(['Date', 'Resource'])['Plan_Qty'].sum().rename('Alloc').reset_index().rename(columns={'Resource': res_col})
+        t = t.merge(ag, on=['Date', res_col], how='left')
+        t['Alloc'] = np.where(t['Date'] == asof, t['Alloc'] * until / run_hours, t['Alloc'])
+        t['Allotted'] = t['Alloc'].where(t['Alloc'].notna(), t['Derived'])
+        t['Allot_Source'] = np.where(t['Alloc'].notna(), 'Allotment tab', 'Derived (hours with a style)')
+    else:
+        t['Allotted'] = t['Derived']
+        t['Allot_Source'] = 'Derived (hours with a style)'
+    t['Allotted'] = np.minimum(t['Allotted'], t['Capacity'])
+    t['Lost_Pcs'] = t['Downtime_Min'] / 60.0 * t['Cap_hr']
+    t['Month'] = t['Date'].dt.strftime('%Y-%m')
+    return t.drop(columns=['Derived'] + (['Alloc'] if 'Alloc' in t.columns else []))
+
+
+def cap_rollup(t, by):
+    if t.empty:
+        return pd.DataFrame()
+    agg = dict(Cap_hr=('Cap_hr', 'mean'), Days=('Date', 'nunique'), Avail_Hours=('Avail_Hours', 'sum'), Capacity=('Capacity', 'sum'), Allotted=('Allotted', 'sum'),
+               Output=('Output', 'sum'), Input=('Input', 'sum'), Defect=('Defect', 'sum'), Rework=('Rework', 'sum'),
+               Downtime_Min=('Downtime_Min', 'sum'), Lost_Pcs=('Lost_Pcs', 'sum'))
+    if 'QC_Inspected' in t.columns:
+        agg['QC_Inspected'] = ('QC_Inspected', 'sum')
+    g = t.groupby(by).agg(**agg).reset_index()
+    g['Idle_Capacity'] = (g['Capacity'] - g['Allotted']).clip(lower=0)
+    g['Allot_Pct'] = safe_div(g['Allotted'], g['Capacity']) * 100
+    g['Plan_Achv_Pct'] = safe_div(g['Output'], g['Allotted']) * 100
+    g['Util_Pct'] = safe_div(g['Output'], g['Capacity']) * 100
+    g['Down_Pct'] = safe_div(g['Downtime_Min'], g['Avail_Hours'] * 60.0) * 100
+    qc = g['QC_Inspected'] if 'QC_Inspected' in g.columns else g['Output']
+    g['Defect_Pct'] = safe_div(g['Defect'], qc) * 100
+    g['Rework_Pct'] = safe_div(g['Rework'], g['Output']) * 100
+    return g
+
+
+def top_reasons(log, unit, res_col, d0, d1, asof, until, n=2):
+    asof = pd.Timestamp(asof).normalize()
+    d = log[(log['Unit'] == unit) & (log['Date'] >= pd.Timestamp(d0)) & (log['Date'] <= min(pd.Timestamp(d1), asof)) & (log['Downtime_Min'] > 0)]
+    d = d[(d['Date'] < asof) | (d['Hour_Idx'] <= until)]
+    if d.empty:
+        return pd.DataFrame(columns=[res_col, 'Top_Downtime_Reasons'])
+    d = d.assign(Downtime_Reason=d['Downtime_Reason'].replace('', '(no reason)'))
+    g = d.groupby([res_col, 'Downtime_Reason'])['Downtime_Min'].sum().reset_index().sort_values([res_col, 'Downtime_Min'], ascending=[True, False])
+    g = g.groupby(res_col).head(n)
+    g['t'] = g['Downtime_Reason'] + ' (' + g['Downtime_Min'].round(0).astype(int).astype(str) + ' min)'
+    return g.groupby(res_col)['t'].agg('; '.join).rename('Top_Downtime_Reasons').reset_index()

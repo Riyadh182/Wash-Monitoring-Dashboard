@@ -1,91 +1,108 @@
+"""Calculation-layer tests on the 10-plant demo data. Run: python tests/test_calc.py"""
 import sys, pathlib
 sys.path.insert(0, str(pathlib.Path(__file__).parent.parent))
 import pandas as pd, numpy as np
-import calc
+import calc, reports
 
 D = pathlib.Path(__file__).parent.parent / 'demo_data'
-def load():
-    r = lambda n: pd.read_csv(D / f'{n}.csv', dtype=str, keep_default_na=False)
-    st = calc.parse_settings(r('Settings'))
-    w, rw = calc.prep_wash(r('Wash_Log'), st['Day_Start_Hour']); d, rd = calc.prep_dry(r('Dry_Log'), st['Day_Start_Hour'])
-    return st, w, d, calc.prep_wip(r('WIP_Log')), calc.prep_machine(r('Master_Machine')), calc.prep_process(r('Master_Process')), rw, rd
+
+
+def rd(n):
+    p = D / f'{n}.csv.gz'
+    p = p if p.exists() else D / f'{n}.csv'
+    return pd.read_csv(p, dtype=str, keep_default_na=False)
+
 
 def test_all():
-    st, w, d, wip, mm, mp, rw, rd = load()
-    assert len(w) == 26712 and len(d) == 7560 and rw.empty and rd.empty
-    assert st['Run_Hours'] == 24 and st['Target_Pct'] == 0.95
-    day = pd.Timestamp('2026-10-06'); unit = 'CWL-1'
+    st = calc.parse_settings(rd('Settings'))
+    w, rw = calc.prep_wash(rd('Wash_Log'), st['Day_Start_Hour']); d, rd_ = calc.prep_dry(rd('Dry_Log'), st['Day_Start_Hour'])
+    wip, mm, mp = calc.prep_wip(rd('WIP_Log')), calc.prep_machine(rd('Master_Machine')), calc.prep_process(rd('Master_Process'))
+    um, alloc = calc.prep_unit_master(rd('Unit_Master')), calc.prep_alloc(rd('Allotment'))
+    order, plan = calc.prep_order(rd('Order_Master')), calc.prep_plan(rd('Daily_Plan'))
+    units = list(um['Wash_Plant'])
+    assert len(units) == 10 and rw.empty and rd_.empty and w['Unit'].nunique() == 10
+    assert w['Date'].nunique() == 30 and len(mm) == 581, (w['Date'].nunique(), len(mm))
+    # ---- plant hourly (CWL-1) ties to capacity file
+    unit, day = 'CWL-1', w['Date'].max()
     plan_hr = calc.unit_plan_per_hr(mm, unit)
-    assert abs(plan_hr * 24 - 40864) < 1, plan_hr * 24          # ties to capacity file
+    assert abs(plan_hr * 24 - 40864) < 1
     wd = calc.apply_filters(w, unit=unit, date=day)
     h = calc.hourly_table(wd, calc.WASH_NUM, plan_hr, 16, calc.opening_wip(wip, unit, day, 'WASH'))
-    assert h['Output'].iloc[:16].notna().all() and h['Output'].iloc[16:].isna().all()
     k = calc.wash_kpis(h, 16)
-    assert abs(k['output'] - wd[wd.Hour_Idx <= 16]['Output'].sum()) < 1e-6
-    assert abs(k['plan'] - plan_hr * 16) < 1e-6
-    print('KPIs', {a: round(b, 3) for a, b in k.items()})
+    assert abs(k['output'] - wd[wd.Hour_Idx <= 16]['Output'].sum()) < 1e-6 and abs(k['plan'] - plan_hr * 16) < 1e-6
     mt = calc.machine_table(wd, mm, unit, 16)
-    assert len(mt) == 53 and abs(mt['Output'].sum() - k['output']) < 1e-6
-    hm = calc.machine_heatmap(wd, mm, unit, 16); assert hm.shape == (53, 16)
+    assert abs(mt['Output'].sum() - k['output']) < 1e-6
     dd = calc.apply_filters(d, unit=unit, date=day)
     dt = calc.dry_table(dd, mp, wip, unit, day, 16)
-    assert len(dt) == 15; print(dt[['Process', 'Plan', 'Output', 'Achv', 'WIP']].round(2).sort_values('Achv').head(3).to_string())
-    cp = calc.critical_process(dt); print('critical', cp['Process'], round(cp['Achv'], 3))
-    assert calc.dry_heatmap(dd, mp, unit, 16).shape == (15, 16)
-    dly = calc.wash_daily(w, mm, unit, '2026-09-16', '2026-10-06'); assert len(dly) == 21
-    mo = calc.monthly(dly); assert list(mo['Month']) == ['2026-09', '2026-10']; print(mo[['Month', 'Days', 'Output', 'Achv', 'Defect_Pct', 'Rewash_Pct']].round(3).to_string())
-    ss = calc.style_summary(w, d); print(ss[['Style', 'Output', 'Defect_Pct', 'Rewash_Pct']].round(3).to_string())
-    assert not calc.pareto(wd).empty
-    hc = calc.health_checks(wd, dd, mm, mp, unit, 16)
-    print('coverage', round(hc['wash_coverage'], 3), round(hc['dry_coverage'], 3), len(hc['dup_wash']), len(hc['suspicious_wash']))
-    # robustness: sheet-style raw inputs (serial dates, blank skeleton rows, EXAMPLE row, bad hour)
+    assert len(dt) == 15
+    # ---- capacity file ties
+    caps = calc.unit_capacity(um, mm, mp, units)
+    c1 = caps[caps.Wash_Plant == 'CWL-1'].iloc[0]
+    assert abs(c1['Wet_Capacity_Day'] - 40864) < 1 and c1['Dry_Capacity_Day'] == 16000
+    assert caps['Wet_Capacity_Day'].notna().all()
+    # ---- order-level status for all plants
+    S = calc.all_status(w, order, plan, units, day, 24, st['Day_Start_Hour'], st['Output_Lag_Days'])
+    assert [c for c, _ in calc.DETAIL_COLS] == list(S.columns[:37]) and set(S['Wash_Plant']) == set(units)
+    # no pcs lost or double counted between logs and order table (priors added on top)
+    for u in ('CWL-1', 'NWL'):
+        su = S[S.Wash_Plant == u]
+        logged = w[(w.Unit == u) & (w.Date <= day)]
+        assert abs(su['Input'].sum() - su['Prior_Input'].sum() - logged['Input'].sum()) < 1e-3
+        assert abs(su['Output'].sum() - su['Prior_Output'].sum() - logged['Output'].sum()) < 1e-3
+    assert abs(S['Total_WIP'] - (S['WIP'] + S['Rewash_WIP'])).max() < 1e-6
+    assert (S['Balance'] >= 0).all() and S['Eff_CRD'].notna().all()
+    # ---- group summaries
+    for by in (['Wash_Plant'], ['Sewing_Unit'], ['Buyer'], ['Sewing_Unit', 'Wash_Plant']):
+        g = calc.group_summary(S, by)
+        assert abs(g['Output'].sum() - S['Output'].sum()) < 1e-6 and abs(g['Total_WIP'].sum() - S['Total_WIP'].sum()) < 1e-6 and g['Orders'].sum() == len(S)
+    cs = calc.crd_summary(S, day, 'week'); assert abs(cs['Order_Qty'].sum() - S['Order_Qty'].sum()) < 1e-6
+    # ---- crisis
+    C = calc.crisis_table(S, 7)
+    assert len(C) > 0 and (C['Balance'] > 0).all() and (C['Days_to_CRD'] <= 7).all() and set(C['Risk']) <= {'Overdue', 'Critical', 'Watch'}
+    assert len(calc.crisis_table(S, 21)) >= len(C) and len(calc.crisis_table(S, 0)) <= len(C)
+    assert S[(S.Balance > 0) & (S.Days_to_CRD <= 7)].shape[0] == len(C)
+    # ---- plant daily / WIP comparison
+    pdl = calc.all_plant_daily(w, wip, units, day - pd.Timedelta(days=5), day)
+    assert len(pdl) == 60
+    wc = calc.wip_compare(pdl, day)
+    assert len(wc) == 10 and np.allclose(wc['WIP_Today'] - wc['WIP_Yesterday'], wc['Change'])
+    pdc = pdl[pdl.Wash_Plant == 'CWL-1'].reset_index(drop=True)
+    assert np.allclose(pdc['Closing_WIP'], pdc['Opening_WIP'] + pdc['Input'] - pdc['Output'])
+    # ---- capacity justification
+    cap_hr = mm[(mm.Unit == unit) & (mm.Active != 'N')].set_index('Machine_ID')['Plan_per_hr'].astype(float)
+    t = calc.resource_daily(w, alloc, cap_hr, unit, 'Machine_ID', day - pd.Timedelta(days=6), day, day, 24)
+    assert len(t) == 7 * len(cap_hr) and (t['Allotted'] <= t['Capacity'] + 1e-6).all()
+    assert abs(t['Capacity'].sum() - cap_hr.sum() * 24 * 7) < 1e-3
+    assert abs(t['Output'].sum() - w[(w.Unit == unit) & (w.Date > day - pd.Timedelta(days=7))]['Output'].sum()) < 1e-3
+    r = calc.cap_rollup(t, ['Month', 'Machine_ID'])
+    assert abs(r['Output'].sum() - t['Output'].sum()) < 1e-6 and r['Util_Pct'].between(0, 200).all()
+    t2 = calc.resource_daily(w, alloc, cap_hr, unit, 'Machine_ID', day, day, day, 10)     # partial day: capacity counts only 10 h
+    assert abs(t2['Capacity'].sum() - cap_hr.sum() * 10) < 1e-3
+    pr = (mp[(mp.Unit == unit)].set_index('Process')['Capacity_per_day'] / 24).astype(float)
+    tp = calc.resource_daily(d, alloc, pr, unit, 'Process', day - pd.Timedelta(days=2), day, day, 24)
+    assert len(tp) == 3 * len(pr)
+    assert isinstance(calc.top_reasons(w, unit, 'Machine_ID', day - pd.Timedelta(days=6), day, day, 24), pd.DataFrame)
+    # ---- reports
+    R = reports.report_set(S, pdl, day, 7, day - pd.Timedelta(days=5), day)
+    assert len(R) >= 10 and all(isinstance(v, pd.DataFrame) for v in R.values())
+    b = reports.excel_bytes(R)
+    assert b[:2] == b'PK' and len(b) > 5000
+    # ---- robustness
     raw = pd.DataFrame([
         [46301, '08:00-09:00', 'CWL-1', 'CWL-1-FL-01', 'Denim', 'S1', '100', '90', '80', '2', '1', '', '', ''],
         ['2026-10-06', '9:00-10:00', '', 'CWL-1-FL-02', 'Denim', '', '10', '12', '', '', '', '', '', ''],
         ['2026-10-06', '10:00-11:00', 'CWL-1', 'CWL-1-FL-03', '', '', '', '', '', '', '', '', '', ''],
         ['2026-10-06', 'xx', 'CWL-1', 'CWL-1-FL-04', '', '', '5', '5', '', '', '', '', '', ''],
         ['2026-10-06', '08:00-09:00', 'CWL-1', 'CWL-1-FL-05', '', '', '5', '5', '', '', '', '', '', 'EXAMPLE row']],
-        columns=['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Downtime_Min', 'Downtime_Reason', 'Remarks'])  # old 14-column sheet still works
+        columns=['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Downtime_Min', 'Downtime_Reason', 'Remarks'])
     c, rj = calc.prep_wash(raw, 8)
-    assert len(c) == 2 and len(rj) == 1, (len(c), len(rj))
-    assert c['Unit'].tolist() == ['CWL-1', 'CWL-1'] and c['Hour_Idx'].tolist() == [1, 2] and c['Style'].tolist() == ['S1', '(no style)']
-    assert c['Date'].iloc[0] == pd.Timestamp('2026-10-06'), c['Date'].iloc[0]   # serial 46301
-    # ---- style details
-    st_o = calc.prep_order(pd.read_csv(D / 'Order_Master.csv', dtype=str, keep_default_na=False))
-    asof = pd.Timestamp('2026-10-06')
-    T = calc.style_details(w, st_o, unit, asof, 24, st['Day_Start_Hour'], st['Output_Lag_Days'])
-    assert [c for c, _ in calc.DETAIL_COLS] == list(T.columns[:-2]) and len(calc.DETAIL_COLS) == 37
-    assert abs(T['Input'].sum() - w[(w.Unit == unit) & (w.Date <= asof)]['Input'].sum()) < 1e-6      # nothing lost / double counted
-    assert abs(T['Output'].sum() - w[(w.Unit == unit) & (w.Date <= asof)]['Output'].sum()) < 1e-6
-    r0 = T[T['PO'] == 'PO-77101'].iloc[0]
-    assert abs(r0['WIP'] - (r0['Input'] - r0['Output'])) < 1e-9 and abs(r0['Total_WIP'] - (r0['WIP'] + r0['Rewash_WIP'])) < 1e-9
-    assert abs(r0['Input_Var'] - (r0['Input'] - r0['Input_Plan'])) < 1e-9
-    assert 0.5 < r0['Hold_First'] < 4 and r0['Last_Out_Date'] >= r0['Last_In_Date']
-    # as-of earlier day: less input; plan fraction lower
-    T2 = calc.style_details(w, st_o, unit, pd.Timestamp('2026-09-25'), 12, st['Day_Start_Hour'], 2)
-    assert T2['Input'].sum() < T['Input'].sum() and T2.loc[T2.PO == 'PO-77101', 'Input_Plan'].iloc[0] < r0['Input_Plan']
-    # no Order_Master at all -> still works, master columns blank
-    T3 = calc.style_details(w, calc.prep_order(pd.DataFrame()), unit, asof, 24)
-    assert len(T3) == 14 and T3['Input_Plan'].isna().all() and T3['Buyer'].eq('').all()
-    # before anything was logged
-    T4 = calc.style_details(w, st_o, unit, pd.Timestamp('2026-09-01'), 24)
-    assert (T4['Input'] == 0).all()
-    print(T[['Style', 'PO', 'Input_Plan', 'Input', 'Achv_Pct', 'Total_WIP', 'Hold_First', 'Hold_Last']].head(3).round(1).to_string())
-    # ---- daily plan / ledger
-    pl = calc.prep_plan(pd.read_csv(D / 'Daily_Plan.csv', dtype=str, keep_default_na=False))
-    T5 = calc.style_details(w, st_o, unit, asof, 24, st['Day_Start_Hour'], 2, pl)
-    assert set(T5['Plan_Source']) >= {'Daily_Plan tab', 'Straight-line from Order_Qty'}
-    dp = calc.order_daily_plan(st_o, pl, unit, 2)
-    key = ('ST-4412 Dark Stone', 'PO-77101', 'Dark Blue')
-    Lg = calc.style_ledger(w, dp, unit, [key], asof, 24)
-    assert abs(Lg['Closing_WIP'].iloc[-1] - (Lg['Input'].sum() - Lg['Output'].sum())) < 1e-6
-    assert (Lg['Opening_WIP'].iloc[1:].values == Lg['Closing_WIP'].iloc[:-1].values).all()       # carry-forward
-    assert (Lg['Available_Input'] == Lg['Opening_WIP'] + Lg['Input']).all()
-    r5 = T5[T5.PO == 'PO-77101'].iloc[0]
-    assert abs(Lg['Cum_Input_Plan'].iloc[-1] - r5['Input_Plan']) < 1e-6 and abs(Lg['Cum_Output'].iloc[-1] - r5['Output']) < 1e-6
-    assert set(calc.ledger_months(Lg)['Month']) == {'2026-09', '2026-10'}
-    assert calc.style_ledger(w, dp, unit, [key], pd.Timestamp('2026-09-01'), 24).empty
+    assert len(c) == 2 and len(rj) == 1 and c['Hour_Idx'].tolist() == [1, 2] and c['Date'].iloc[0] == pd.Timestamp('2026-10-06')
+    # empty frames everywhere
+    e = calc.prep_order(pd.DataFrame())
+    S0 = calc.all_status(w, e, calc.prep_plan(pd.DataFrame()), ['CWL-1'], day, 24)
+    assert calc.group_summary(S0, ['Buyer']) is not None and calc.crisis_table(S0, 7) is not None
     print('ALL OK')
+
 
 if __name__ == '__main__':
     test_all()

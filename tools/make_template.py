@@ -39,7 +39,8 @@ lines = [('WASH & DRY HOURLY LOG - ' + unit, True), ('', False),
  ('6. WIP_Log: one row per stage per day with the physical opening WIP. Stage = WASH or a dry process name (exactly as in Master_Process).', False),
  ('7. Master_Machine / Master_Process: plan per hour comes from here. Edit Plan_per_hr for a machine, or set Active = N for a machine that is down for the day.', False),
  ('8. Share this Google Sheet with the dashboard service account as VIEWER. Floor staff get EDITOR access.', False),
- ('9. Month end: File > Make a copy (name it with the month), keep it as the archive, then clear Wash_Log/Dry_Log/WIP_Log data rows (keep headers) for the new month.', False),
+ ('8b. Unit_Master: wet and dry capacity per day of the plant (shown on Overview). Allotment (optional): plan pcs allotted to each machine / process per day.', False),
+ ('9. Recommended: ONE Google Sheet per wash plant per MONTH (10 sheets). Month end: add the old Sheet ID to Secrets as an archive entry (YYYY-MM:SheetID) and copy this template for the new month.', False),
  ('', False), ('Rows with "EXAMPLE" in Remarks are ignored by the dashboard - delete them whenever you like.', False),
  ('Hour slots assume the production day starts at Day_Start_Hour in Settings (08:00 default): hours after midnight belong to the same production date.', False)]
 for i, (t, b) in enumerate(lines, 2):
@@ -81,10 +82,10 @@ for col, items in [(2, WASH_TYPES), (3, WASH_REASONS), (4, DRY_REASONS), (5, [p[
 # ---- Order master
 om = wb.create_sheet('Order_Master')
 OC = ['Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'CRD', 'CRD_Revisions', 'Updated_CRD', 'Sewing_Unit', 'Order_Qty', 'Plan_Start', 'Plan_End',
-      'Shade_Submit_Date', 'Shade_Approval_Date', 'Merchant', 'Remarks']
+      'Shade_Submit_Date', 'Shade_Approval_Date', 'Merchant', 'Prior_Input', 'Prior_Output', 'Remarks']
 head(om, OC, key_n=5, widths={'Style': 26, 'Merchant': 22, 'Shade_Submit_Date': 16, 'Shade_Approval_Date': 18, 'Remarks': 22})
 import datetime
-exo = [unit, 'Buyer name', 'ST-4412 Dark Stone', 'PO-0001', 'Dark Blue', 'Denim', '2026-11-20', 0, '', 'TISWL-01', 20000, '2026-10-08', '2026-10-20', '2026-10-05', '', 'Merchant name', 'EXAMPLE - delete me']
+exo = [unit, 'Buyer name', 'ST-4412 Dark Stone', 'PO-0001', 'Dark Blue', 'Denim', '2026-11-20', 0, '', 'TISWL-01', 20000, '2026-10-08', '2026-10-20', '2026-10-05', '', 'Merchant name', 0, 0, 'EXAMPLE - delete me']
 for j, v in enumerate(exo, 1):
     c = om.cell(2, j, v); c.font = F(c='0000FF')
 for r_ in range(2, 2001):
@@ -137,4 +138,16 @@ wp = wb.create_sheet('WIP_Log'); head(wp, ['Date', 'Unit', 'Stage', 'Opening_WIP
 for j, v in enumerate(['2026-10-08', unit, 'WASH', 100000, 'EXAMPLE - delete me'], 1): wp.cell(2, j, v).font = F(c='0000FF')
 d3 = DataValidation(type='list', formula1='=Lists!$E$2:$E$30', allow_blank=True, showErrorMessage=False); wp.add_data_validation(d3); d3.add('C3:C5000')
 for ws in (wl, dl, wp): ws.column_dimensions['A'].width = 12
+# ---- Unit master and allotment (new)
+um = wb.create_sheet('Unit_Master'); head(um, ['Wash_Plant', 'Wet_Capacity_Day', 'Dry_Capacity_Day'], key_n=1, widths={'Wet_Capacity_Day': 20, 'Dry_Capacity_Day': 20})
+u_ = CFG['units'][unit]
+for j, v in enumerate([unit, u_['wash_cap_day'], u_['dry_cap_day']], 1):
+    c = um.cell(2, j, v); c.font = F(c='0000FF' if j > 1 else '222222')
+    if j > 1: c.fill = fill(INP)
+um['E1'] = 'Plant total capacity in pcs per day (wet = wash, dry = dry process total, no breakdown). Shown on the dashboard Overview.'
+um['E1'].font = F(s=9, c='666666'); um.column_dimensions['E'].width = 90
+al = wb.create_sheet('Allotment'); head(al, ['Date', 'Unit', 'Resource', 'Style', 'PO', 'Color', 'Plan_Qty'], key_n=3, widths={'Resource': 24, 'Style': 26, 'PO': 12, 'Color': 16})
+al['I1'] = 'Optional. Plan pcs ALLOTTED to a machine (Machine_ID) or dry process (Process name) for a date and order. Used by the Capacity page (allotted plan vs capacity vs actual). If empty, the dashboard derives it from the hours the resource ran a style.'
+al['I1'].font = F(s=9, c='666666'); al.column_dimensions['I'].width = 90
+for r_ in range(2, 20001): al.cell(r_, 1).number_format = 'yyyy-mm-dd'
 wb.save(out); print('saved', out)
