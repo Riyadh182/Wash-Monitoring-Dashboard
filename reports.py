@@ -20,14 +20,17 @@ LABELS = {
     'Capacity': 'Capacity (pcs)', 'Allotted': 'Allotted plan (pcs)', 'Idle_Capacity': 'Idle capacity (pcs)', 'Allot_Pct': 'Allotment (%)',
     'Plan_Achv_Pct': 'Plan achievement (%)', 'Util_Pct': 'Capacity utilisation (%)', 'Downtime_Min': 'Downtime (min)', 'Down_Pct': 'Downtime (% of time)',
     'Lost_Pcs': 'Lost pcs (downtime)', 'Defect_Pct': 'Defect (%)', 'Rework_Pct': 'Rework (%)', 'Top_Downtime_Reasons': 'Top downtime reasons',
+    'Overrun_Orders': 'Plan-overrun orders', 'Plan_End': 'Wash plan end', 'Overrun_Days': 'Days past plan end', 'Flags': 'Red flags', 'Priority': 'Wash priority (EDD, FIFO)',
+    'Forecast_Date': 'Forecast completion', 'Late_Days': 'Late (days) vs CRD', 'Verdict': 'Forecast verdict', 'Plan_Revisions': 'Plan revisions', 'Edited': 'Edited entries',
+    'First_Receive_Date': 'First received', 'Sew_Delay_Days': 'Sewing delay (days)', 'Suggested_Wash': 'Suggested wash (pcs)', 'Item': 'Item', 'Season': 'Season', 'Missing_Body': 'Missing body',
     'Wet_Capacity_Day': 'Wet (wash) capacity / day', 'Dry_Capacity_Day': 'Dry capacity / day',
 }
 ORDER_VIEW = ['Wash_Plant', 'Sewing_Unit', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'Eff_CRD', 'Days_to_CRD', 'Order_Qty', 'Input_Plan', 'Input', 'Input_Var',
               'Output_Plan', 'Output', 'Output_Var', 'Achv_Pct', 'WIP', 'Rewash_WIP', 'Total_WIP', 'Balance']
 GROUP_VIEW = ['Orders', 'Order_Qty', 'Input_Plan', 'Input', 'Input_Var', 'Input_Achv_Pct', 'Output_Plan', 'Output', 'Output_Var', 'Achv_Pct', 'WIP', 'Rewash_WIP',
-              'Total_WIP', 'Balance', 'Rewash', 'Rewash_Pct', 'DHU', 'Reject', 'Reject_Pct', 'Crisis_Orders', 'Crisis_Pcs', 'Next_CRD']
+              'Total_WIP', 'Balance', 'Rewash', 'Rewash_Pct', 'DHU', 'Reject', 'Reject_Pct', 'Crisis_Orders', 'Crisis_Pcs', 'Overrun_Orders', 'Next_CRD']
 CRISIS_VIEW = ['Risk', 'Wash_Plant', 'Sewing_Unit', 'Buyer', 'Style', 'PO', 'Color', 'Eff_CRD', 'Days_to_CRD', 'Order_Qty', 'Output', 'Balance', 'Total_WIP', 'Pending_Input',
-               'Rate3', 'Required_Rate', 'Can_Finish', 'Where_Stuck', 'Merchant']
+               'Rate3', 'Required_Rate', 'Can_Finish', 'Where_Stuck', 'Plan_End', 'Overrun_Days', 'Flags', 'Merchant']
 
 
 def cols(df, want):

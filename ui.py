@@ -10,7 +10,7 @@ import reports
 # vivid colours that read well on BOTH dark and light backgrounds
 TEAL, AMBER, CORAL, INDIGO, SKY, VIOLET, GREEN, PINK, SLATE = '#14B8A6', '#F59E0B', '#F43F5E', '#6366F1', '#38BDF8', '#A855F7', '#22C55E', '#EC4899', '#94A3B8'
 PALETTE = [TEAL, AMBER, INDIGO, CORAL, SKY, VIOLET, GREEN, PINK, '#F97316', '#84CC16']
-RISK_COL = {'Overdue': '#E11D48', 'Critical': '#F97316', 'Watch': '#FACC15'}
+RISK_COL = {'Overdue': '#E11D48', 'Critical': '#F97316', 'Watch': '#FACC15', 'Overrun': '#A855F7'}
 HEAT = [[0, '#F43F5E'], [0.45, '#FBBF24'], [0.75, '#86EFAC'], [1, '#14B8A6']]
 GRID = 'rgba(148,163,184,0.22)'
 

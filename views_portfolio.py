@@ -17,9 +17,9 @@ def _opts(S, col):
     return sorted(x for x in S[col].dropna().astype(str).unique() if x and x != 'nan')
 
 
-def filters(X, key, crd=True, expand=True):
+def filters(X, key, crd=True, expand=True, S=None):
     """Multi-select cascading filters: every list shows only values that exist given the OTHER selections."""
-    S = X.S_all
+    S = X.S_all if S is None else S
     if S.empty:
         return S, [], 0
     cur = {k: [v for v in st.session_state.get(f'{key}_{k}', [])] for k in ('pl', 'sw', 'by')}
@@ -188,6 +188,9 @@ def crisis(X):
     hz = st.slider('Crisis horizon (days from selected date): orders with balance still to deliver and CRD within', 1, 21, 7, key='cr_h')
     F, pl, n = filters(X, 'cr', crd=False)
     C = calc.crisis_table(F, hz)
+    if len(C) and 'Overrun_Days' in C.columns:
+        import board
+        C['Flags'] = board.red_flags(C)
     if C.empty:
         st.success(f'No crisis: every open order in this selection has CRD later than {hz} days or is delivered.')
         return
@@ -195,22 +198,22 @@ def crisis(X):
     kpi(c[0], 'Crisis orders', fi(len(C)), f"{C['Buyer'].nunique()} buyers | {C['Wash_Plant'].nunique()} plants", 'bad')
     kpi(c[1], 'Balance to deliver', fi(C['Balance'].sum()), 'pcs', 'bad')
     kpi(c[2], 'Overdue', fi((C['Risk'] == 'Overdue').sum()), f"{fi(C.loc[C['Risk'] == 'Overdue', 'Balance'].sum())} pcs", 'bad')
-    kpi(c[3], 'Critical', fi((C['Risk'] == 'Critical').sum()), '<= 3 days or cannot finish at current speed', 'warn')
+    kpi(c[3], 'Critical | Plan overrun', f"{fi((C['Risk'] == 'Critical').sum())} | {fi((C['Risk'] == 'Overrun').sum())}", 'critical: <= 3 days or too slow; overrun: plan end passed, CRD later', 'warn')
     kpi(c[4], 'WIP already inside wash', fi(C['Total_WIP'].sum()), f"Not yet received: {fi(C['Pending_Input'].sum())}", 'info')
     a, b = st.columns(2)
     with a:
         gb = C.groupby(['Buyer', 'Risk'])['Balance'].sum().reset_index()
         fig = go.Figure()
-        for rk in ['Overdue', 'Critical', 'Watch']:
+        for rk in ['Overdue', 'Critical', 'Watch', 'Overrun']:
             d = gb[gb['Risk'] == rk]
-            fig.add_trace(go.Bar(x=d['Buyer'], y=d['Balance'], name=rk, marker_color=RISK_COL[rk]))
+            fig.add_trace(go.Bar(x=d['Buyer'], y=d['Balance'], name=rk, marker_color=RISK_COL.get(rk, VIOLET)))
         show(style_fig(fig, 'Balance to deliver by buyer and risk', grouped=False))
     with b:
         gp = C.groupby(['Wash_Plant', 'Risk'])['Balance'].sum().reset_index()
         fig = go.Figure()
-        for rk in ['Overdue', 'Critical', 'Watch']:
+        for rk in ['Overdue', 'Critical', 'Watch', 'Overrun']:
             d = gp[gp['Risk'] == rk]
-            fig.add_trace(go.Bar(x=d['Wash_Plant'], y=d['Balance'], name=rk, marker_color=RISK_COL[rk]))
+            fig.add_trace(go.Bar(x=d['Wash_Plant'], y=d['Balance'], name=rk, marker_color=RISK_COL.get(rk, VIOLET)))
         show(style_fig(fig, 'Balance to deliver by wash plant and risk', grouped=False))
     gd = C.groupby('Days_to_CRD')['Balance'].sum().reset_index()
     fig = go.Figure(go.Bar(x=gd['Days_to_CRD'].map(lambda d: f'{d:+d} d'), y=gd['Balance'], marker_color=[RISK_COL['Overdue'] if d < 0 else (RISK_COL['Critical'] if d <= 3 else RISK_COL['Watch']) for d in gd['Days_to_CRD']], name='Balance'))
@@ -224,7 +227,7 @@ def crisis(X):
     B = reports.buyer_crisis(C)
     table(B, auto_cfg(B), height=min(420, 60 + 35 * len(B)))
     downloads(B, f'buyer_crisis_{X.day:%Y%m%d}', 'dl_crb', 'Buyer crisis')
-    note('Risk: Overdue = CRD passed; Critical = 3 days or less, or the last-3-day output rate cannot clear the balance before CRD; Watch = the rest. '
+    note('Risk: Overrun = plan end date passed with balance still open although CRD is later (possible crisis); Overdue = CRD passed; Critical = 3 days or less, or the last-3-day output rate cannot clear the balance before CRD; Watch = the rest. '
          'Where stuck: In wash = WIP is at least half of the balance; Not yet received = input still pending.')
 
 
@@ -373,6 +376,21 @@ def reports_view(X):
     SD = reports.cols(F.rename(columns={}), [c for c, _ in calc.DETAIL_COLS if c in F.columns])
     SD = SD.assign(Machines=F['Machines_Full']).rename(columns={**dict(calc.DETAIL_COLS), 'Input_Var': 'Variation (Input)', 'Output_Var': 'Variation (Output)'})
     R['12 Style details (all plants)'] = SD
+    if getattr(X, 'board_mode', False):
+        import board
+        import views_board as VB
+        Fx, _ = VB.forecast(X, 'Plant capacity (Unit_Master)', 90)
+        Sx = F.merge(Fx[['Wash_Plant', 'Style', 'PO', 'Color', 'Forecast_Date', 'Late_Days', 'Verdict']], on=['Wash_Plant'] + calc.KEYS, how='left')
+        Sx['Flags'] = board.red_flags(Sx)
+        R['13 Wash sequence EDD-FIFO'] = reports.cols(Sx[Sx['Priority'].notna()].sort_values(['Wash_Plant', 'Priority']), VB.SEQ_VIEW)
+        R['14 Red flags'] = reports.cols(Sx[Sx['Flags'] != ''].sort_values('Days_to_CRD'), ['Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Eff_CRD', 'Days_to_CRD', 'Balance', 'WIP', 'Plan_End', 'Overrun_Days', 'Verdict', 'Flags'])
+        pos, order = board.stage_position(X.D['stage'], X.day, X.D['mstage'])
+        if len(pos):
+            R['15 PO position by stage'] = pos
+        if len(X.D['audit']):
+            R['16 Edited entries'] = X.D['audit']
+        if len(X.D['hist']):
+            R['17 Plan history'] = X.D['hist']
     names = list(R)
     pick = st.selectbox('Preview report', names, key='rp_pick')
     df = R[pick]

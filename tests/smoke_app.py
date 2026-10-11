@@ -79,7 +79,7 @@ def run(cfg):
         pl = types.ModuleType('plotly'); pl.graph_objects = go; pl.subplots = sub
         mods.update({'plotly': pl, 'plotly.graph_objects': go, 'plotly.subplots': sub})
     for k in list(sys.modules):
-        if k in ('app', 'data', 'calc', 'ui', 'views_plant', 'views_portfolio', 'reports'): del sys.modules[k]
+        if k in ('app', 'data', 'calc', 'ui', 'views_plant', 'views_portfolio', 'views_board', 'board', 'reports'): del sys.modules[k]
     sys.modules.update(mods)
     try:
         runpy.run_path(str(ROOT / 'app.py'), run_name='__main__')
@@ -88,7 +88,7 @@ def run(cfg):
     return log
 
 
-NAV = ['🌐 Overview', '⏱ Hourly Monitor', '🏭 Machines', '🔥 Dry Process', '⚖️ Capacity', '🚨 CRD Crisis', '🧪 Quality & Downtime', '👗 Style Explorer', '📈 Trends', '📑 Reports', '🩺 Data Health']
+NAV = ['🌐 Overview', '📋 Plan Execution', '🗓 Daily Board', '📍 PO Tracker', '🚨 CRD Crisis', '📑 Reports', '🛡 Audit & History', '⏱ Hourly Monitor', '🏭 Machines', '🔥 Dry Process', '⚖️ Capacity', '🧪 Quality & Downtime', '👗 Style Explorer', '📈 Trends', '🩺 Data Health']
 cases = {}
 for v in NAV:
     cases[v] = {'nav': v}
@@ -111,6 +111,15 @@ cases.update({
     'overview plant filter': {'nav': '🌐 Overview', 'ov_pl': ['CWL-1', 'CWL-2']},
     'crisis horizon 3': {'nav': '🚨 CRD Crisis', 'horizon': 3},
     'reports pack': {'nav': '📑 Reports', 'button:rp_build': True},
+    'plan exec recent basis': {'nav': '📋 Plan Execution', 'pe_basis': 'Recent actual (last 7 days average)'},
+    'plan exec one plant': {'nav': '📋 Plan Execution', 'pe_pl': ['CWL-2']},
+    'plan exec 2 plants': {'nav': '📋 Plan Execution', 'pe_pl': ['CWL-2', 'SWDL'], 'pe_plant': 'SWDL'},
+    'daily board wash actual': {'nav': '🗓 Daily Board', 'db_sec': 'Wash production', 'db_met': 'Actual'},
+    'daily board sewing var': {'nav': '🗓 Daily Board', 'db_sec': 'Sewing delivery', 'db_met': 'Variation'},
+    'daily board plan NWL': {'nav': '🗓 Daily Board', 'db_met': 'Plan', 'db_plant': 'NWL'},
+    'po tracker search': {'nav': '📍 PO Tracker'},
+    'po tracker plant': {'nav': '📍 PO Tracker', 'pt_pl': ['EWDL']},
+    'crisis horizon 14': {'nav': '🚨 CRD Crisis', 'horizon': 14},
 })
 
 if __name__ == '__main__':

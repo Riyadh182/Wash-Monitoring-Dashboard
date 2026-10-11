@@ -701,7 +701,10 @@ def group_summary(S, by, horizon=7):
     d['Crisis'] = ((d['Balance'] > 0) & (d['Days_to_CRD'] <= horizon)).astype(int)
     d['Crisis_Pcs'] = np.where(d['Crisis'] == 1, d['Balance'], 0.0)
     d['_nc'] = d['Eff_CRD'].where(d['Balance'] > 0)
-    g = d.groupby(by, dropna=False).agg(Orders=('Style', 'size'), Styles=('Style', 'nunique'), Next_CRD=('_nc', 'min'),
+    if 'Overrun_Days' in d.columns:
+        d['Overrun'] = ((d['Overrun_Days'] > 0) & (d['Balance'] > 0)).astype(int)
+    ag = dict(Overrun_Orders=('Overrun', 'sum')) if 'Overrun' in d.columns else {}
+    g = d.groupby(by, dropna=False).agg(**ag, Orders=('Style', 'size'), Styles=('Style', 'nunique'), Next_CRD=('_nc', 'min'),
                                         Crisis_Orders=('Crisis', 'sum'), Crisis_Pcs=('Crisis_Pcs', 'sum'),
                                         **{c: (c, 'sum') for c in SUM_COLS}).reset_index()
     g['Input_Var'] = g['Input'] - g['Input_Plan']
@@ -730,18 +733,21 @@ def crd_summary(S, asof, freq='date'):
 
 
 def crisis_table(S, horizon=7):
-    """Orders with balance still to deliver whose CRD is overdue or within `horizon` days."""
+    """Orders with balance still to deliver whose CRD is overdue / within `horizon` days (crisis), plus orders whose PLAN END has passed
+    with balance still open even though CRD is later (possible crisis, red flag 'Overrun')."""
     if S.empty:
         return pd.DataFrame()
-    c = S[(S['Eff_CRD'].notna()) & (S['Balance'] > 0) & (S['Days_to_CRD'] <= horizon)].copy()
+    over = (S['Overrun_Days'] > 0) if 'Overrun_Days' in S.columns else pd.Series(False, index=S.index)
+    c = S[(S['Eff_CRD'].notna()) & (S['Balance'] > 0) & ((S['Days_to_CRD'] <= horizon) | over)].copy()
     if c.empty:
         return c
     days = c['Days_to_CRD'].clip(lower=1)
     c['Required_Rate'] = c['Balance'] / days
     c['Can_Finish'] = (c['Days_to_CRD'] > 0) & (c['Rate3'] * c['Days_to_CRD'] >= c['Balance'])
-    c['Risk'] = np.where(c['Days_to_CRD'] < 0, 'Overdue', np.where((c['Days_to_CRD'] <= 3) | ~c['Can_Finish'], 'Critical', 'Watch'))
+    inh = c['Days_to_CRD'] <= horizon
+    c['Risk'] = np.where(c['Days_to_CRD'] < 0, 'Overdue', np.where(~inh, 'Overrun', np.where((c['Days_to_CRD'] <= 3) | ~c['Can_Finish'], 'Critical', 'Watch')))
     c['Where_Stuck'] = np.where(c['Total_WIP'] >= 0.5 * c['Balance'], 'In wash (WIP)', np.where(c['Pending_Input'] > 0.5 * c['Balance'], 'Not yet received', 'Mixed'))
-    c['_r'] = c['Risk'].map({'Overdue': 0, 'Critical': 1, 'Watch': 2})
+    c['_r'] = c['Risk'].map({'Overdue': 0, 'Critical': 1, 'Watch': 2, 'Overrun': 3})
     return c.sort_values(['_r', 'Days_to_CRD', 'Balance'], ascending=[True, True, False]).drop(columns='_r').reset_index(drop=True)
 
 
