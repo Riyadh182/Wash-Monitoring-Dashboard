@@ -1,0 +1,177 @@
+"""Builds the Google-Sheet template (.xlsx) for one unit: python make_template.py CWL-1 ../Wash_Pilot_Template_CWL-1.xlsx"""
+import sys
+from openpyxl import Workbook
+from openpyxl.styles import Font, PatternFill, Alignment
+from openpyxl.worksheet.datavalidation import DataValidation
+from openpyxl.utils import get_column_letter as CL
+from common import *
+
+unit = sys.argv[1] if len(sys.argv) > 1 else 'CWL-1'
+out = sys.argv[2] if len(sys.argv) > 2 else f'Wash_Pilot_Template_{unit}.xlsx'
+if not CFG['units'][unit]['dry_verified'] and CFG['units'][unit]['dry_processes']:
+    print(f'WARNING: dry-process capacity for {unit} duplicates an earlier unit in Capacity_August_2026 - verify before use.')
+if not CFG['units'][unit]['dry_processes']:
+    print(f'NOTE: no dry-process capacity in source for {unit}; Master_Process will be empty - fill it in.')
+
+F = lambda b=False, c='222222', s=10: Font(name='Arial', size=s, bold=b, color=c)
+fill = lambda c: PatternFill('solid', start_color=c, end_color=c)
+NAVY, TEAL, KEY, INP = '1B2A41', '2A9D8F', 'ECEFF3', 'FFF8CC'
+wb = Workbook()
+
+def head(ws, cols, key_n=0, widths=None, row=1):
+    for j, h in enumerate(cols, 1):
+        c = ws.cell(row, j, h); c.font = F(True, 'FFFFFF', 10); c.alignment = Alignment(horizontal='center', vertical='center', wrap_text=True)
+        c.fill = fill(NAVY if j <= key_n else TEAL)
+        ws.column_dimensions[CL(j)].width = (widths or {}).get(h, 16)
+    ws.row_dimensions[row].height = 32; ws.freeze_panes = ws.cell(row + 1, 1)
+
+# ---- README
+r = wb.active; r.title = 'README'; r.sheet_view.showGridLines = False
+r.column_dimensions['A'].width = 3; r.column_dimensions['B'].width = 120
+lines = [('WASH & DRY DATA ENTRY - ' + unit, True), ('', False),
+ ('KAJ KORAR NIYOM (floor / supervisor): shudhu "Cycle_Log" tab-e ekta load = ekta line.', True),
+ ('  1. Load machine-e dile: Machine_ID (dropdown), Order (dropdown: Style | PO | Color), Pcs likho. Date ar In_Time nijei boshe jabe (na boshle nijey likho: yyyy-mm-dd, 08:30).', False),
+ ('  2. Load nama hole: sei line-er Out_Time-e  x  likho -> ekhonkar time boshe jabe (ba nijey time likho, jemon 10:05).', False),
+ ('  3. Kono defect / rewash / downtime thakle shudhu oi line-er Defect, Rewash, Downtime_Min-e number likho. Na thakle faka rakho.', False),
+ ('  Eta-i. Input (load dhukar ghonta), Output (load nama-r ghonta), Recipe time (Out - In), WIP (dhuka kintu nama baki), machine-wise recipe time dashboard nijei hisab kore.', False),
+ ('  Style / PO / Color alada kore lekhar dorkar nai: Order dropdown-e sob ache. Notun PO hole Order_Master-e ekta line add korlei dropdown-e chole ashbe.', False),
+ ('', False),
+ ('PLANNER / MERCHANT (ekbar): Order_Master (Style, PO, Color, Buyer, CRD, Qty, Plan Start/End). Master_Machine: Plan_per_hr ar Std_Recipe_Min (standard recipe time, minute).', True),
+ ('DRY PROCESS: Dry_Log-e process-wise hourly number (Order dropdown ba type). Finished dry output = oi style-er jei jei dry process lagche tar MIN output (jog kora hoy na).', False),
+ ('', False),
+ ('SETUP', True),
+ ('1. Upload this file to Google Drive and open with Google Sheets (File > Save as Google Sheets).', False),
+ ('2. Extensions > Apps Script > paste apps_script/Code.gs > Save > reload. Menu "Wash Tools" ashbe ar Cycle_Log-e Date / time auto-fill kaj korbe.', False),
+ ('3. Share: "Anyone with the link - Editor" (floor), dashboard Secrets-e Sheet ID boshao.', False),
+ ('4. Wash_Log (machine x hour rows) ekhon OPTIONAL: Cycle_Log use korle Wash_Log lagbe na. Dui-tai thakle dashboard duita-i jog kore, tai ekই din-er data duibar dio na.', False),
+ ('5. WIP_Log: stage-wise physical opening WIP (optional). Unit_Master: plant-er wet / dry capacity per day. Daily_Plan / Allotment optional.', False),
+ ('6. Rows with "EXAMPLE" in Remarks are ignored by the dashboard - delete them whenever you like. Dates always yyyy-mm-dd.', False),
+ ('7. Recommended: ONE Google Sheet per wash plant per MONTH (10 sheets). Month end: old Sheet ID Secrets-e archive-e (YYYY-MM:SheetID) add koro, notun mash-er jonno ei template copy koro.', False),
+ ('8. Production day Day_Start_Hour (Settings, default 08:00) theke shuru; raat 12-ta-r por-er load-o same production date-e jay.', False)]
+for i, (t, b) in enumerate(lines, 2):
+    c = r.cell(i, 2, t); c.font = F(b, NAVY if b else '222222', 14 if b else 10); c.alignment = Alignment(wrap_text=True, vertical='top')
+
+# ---- Settings
+s = wb.create_sheet('Settings'); head(s, ['Key', 'Value', 'Meaning'], widths={'Key': 20, 'Value': 12, 'Meaning': 90})
+notes = {'Run_Hours': 'Hours the plant runs per day (hourly plan = capacity per day / this)', 'Day_Start_Hour': 'Production day start hour (0-23); shifts A/B/C are 8 hours each',
+         'Plan_Basis': '1 = plan at 100% of capacity; 0.85 = plan at 85% load', 'Target_Pct': 'Achievement at/above = green', 'Alert_Pct': 'Achievement below = red',
+         'Max_Defect_Pct': 'Defect limit (defect pcs / QC inspected pcs) - placeholder, set yours', 'Max_Rewash_Pct': 'Rewash limit (rewash pcs / output pcs) - placeholder, set yours', 'Output_Lag_Days': 'Style details: wash OUTPUT plan starts this many days after the input plan'}
+for i, (k, v) in enumerate(DEFAULT_SETTINGS, 2):
+    s.cell(i, 1, k).font = F(True); c = s.cell(i, 2, v); c.font = F(c='0000FF'); c.fill = fill(INP); s.cell(i, 3, notes[k]).font = F(s=9, c='666666')
+    if k.endswith('Pct') or k == 'Plan_Basis': c.number_format = '0%'
+
+# ---- Masters
+mm = wb.create_sheet('Master_Machine'); head(mm, ['Unit', 'Machine_ID', 'Type', 'Plan_per_hr', 'Active', 'Std_Recipe_Min'], key_n=3, widths={'Std_Recipe_Min': 16})
+for i, m in enumerate(machines_for(unit), 2):
+    m['Std_Recipe_Min'] = 90
+    for j, k in enumerate(['Unit', 'Machine_ID', 'Type', 'Plan_per_hr', 'Active', 'Std_Recipe_Min'], 1):
+        c = mm.cell(i, j, m[k]); c.font = F(c='0000FF' if j >= 4 else '222222')
+        if j >= 4: c.fill = fill(INP)
+dv = DataValidation(type='list', formula1='"Y,N"', allow_blank=False); mm.add_data_validation(dv); dv.add(f'E2:E{mm.max_row}')
+mm['H1'] = 'Std_Recipe_Min = standard recipe (cycle) time in minutes for this machine; the Machines page compares the actual average with it. Plan_per_hr = unit wash capacity per day / machines / run hours (Capacity_August_2026). It is an average - overwrite per machine when you know the real capacity.'
+mm['H1'].font = F(s=9, c='666666'); mm.column_dimensions['H'].width = 80
+
+mp = wb.create_sheet('Master_Process'); head(mp, ['Unit', 'Process', 'Machines', 'Capacity_per_day', 'Active'], key_n=2, widths={'Process': 28})
+for i, p in enumerate(processes_for(unit), 2):
+    for j, k in enumerate(['Unit', 'Process', 'Machines', 'Capacity_per_day', 'Active'], 1):
+        c = mp.cell(i, j, p[k]); c.font = F(c='0000FF' if j >= 3 else '222222')
+        if j >= 3: c.fill = fill(INP)
+dv2 = DataValidation(type='list', formula1='"Y,N"'); mp.add_data_validation(dv2); dv2.add(f'E2:E{max(mp.max_row, 30)}')
+
+# ---- Lists
+ls = wb.create_sheet('Lists'); head(ls, ['Hour slots', 'Wash types', 'Wash downtime reasons', 'Dry downtime reasons', 'Dry processes'],
+                                   widths={'Wash downtime reasons': 26, 'Dry downtime reasons': 26, 'Dry processes': 28})
+for i, v in enumerate(hour_labels(8), 2): ls.cell(i, 1, v)
+for col, items in [(2, WASH_TYPES), (3, WASH_REASONS), (4, DRY_REASONS), (5, [p['Process'] for p in processes_for(unit)])]:
+    for i, v in enumerate(items, 2): ls.cell(i, col, v)
+
+# ---- Order master
+om = wb.create_sheet('Order_Master')
+OC = ['Wash_Plant', 'Buyer', 'Style', 'PO', 'Color', 'Wash_Type', 'CRD', 'CRD_Revisions', 'Updated_CRD', 'Sewing_Unit', 'Order_Qty', 'Plan_Start', 'Plan_End',
+      'Shade_Submit_Date', 'Shade_Approval_Date', 'Merchant', 'Prior_Input', 'Prior_Output', 'Remarks']
+OC = OC + ['Order']
+head(om, OC, key_n=5, widths={'Style': 26, 'Merchant': 22, 'Shade_Submit_Date': 16, 'Shade_Approval_Date': 18, 'Remarks': 22})
+import datetime
+exo = [unit, 'Buyer name', 'ST-4412 Dark Stone', 'PO-0001', 'Dark Blue', 'Denim', '2026-11-20', 0, '', 'TISWL-01', 20000, '2026-10-08', '2026-10-20', '2026-10-05', '', 'Merchant name', 0, 0, 'EXAMPLE - delete me']
+for j, v in enumerate(exo, 1):
+    c = om.cell(2, j, v); c.font = F(c='0000FF')
+for r_ in range(2, 2001):
+    for j in (7, 9, 12, 13, 14, 15): om.cell(r_, j).number_format = 'yyyy-mm-dd'
+    om.cell(r_, 20, f'=IF(C{r_}="","",C{r_}&" | "&D{r_}&" | "&E{r_})').font = F(c='888888')
+om.column_dimensions['T'].width = 44
+dvw = DataValidation(type='list', formula1='=Lists!$B$2:$B$10', allow_blank=True, showErrorMessage=False); om.add_data_validation(dvw); dvw.add('F2:F2000')
+
+# ---- Logs
+LAST = 60000
+def listval(ws, formula, rng, strict):
+    d = DataValidation(type='list', formula1=formula, allow_blank=True, showErrorMessage=strict); ws.add_data_validation(d); d.add(rng)
+def numval(ws, rng):
+    d = DataValidation(type='decimal', operator='greaterThanOrEqual', formula1='0', allow_blank=True, showErrorMessage=True, errorTitle='Check value', error='Enter a number >= 0')
+    ws.add_data_validation(d); d.add(rng)
+
+
+# ---- Cycle_Log (MAIN ENTRY: one row per load)
+cl = wb.create_sheet('Cycle_Log', 1)
+head(cl, ['Date', 'Machine_ID', 'Order', 'Pcs', 'In_Time', 'Out_Time', 'Defect', 'Rewash', 'Downtime_Min', 'Remarks'], key_n=3,
+     widths={'Machine_ID': 18, 'Order': 46, 'Pcs': 9, 'In_Time': 10, 'Out_Time': 10, 'Remarks': 20})
+for j, v in enumerate(['2026-10-08', machines_for(unit)[0]['Machine_ID'], 'ST-4412 Dark Stone | PO-0001 | Dark Blue', 420, '08:30', '10:05', 2, '', '', 'EXAMPLE - delete me'], 1):
+    cl.cell(2, j, v).font = F(c='0000FF')
+for r_ in range(2, 40001):
+    cl.cell(r_, 1).number_format = 'yyyy-mm-dd'; cl.cell(r_, 5).number_format = '@'; cl.cell(r_, 6).number_format = '@'
+cl['L1'] = 'In_Time / Out_Time: HH:MM. Out_Time-e x likhle ekhonkar time boshe (Apps Script). Out_Time faka = load ekhono machine-e (WIP).'
+cl['L1'].font = F(s=9, c='666666'); cl.column_dimensions['L'].width = 90
+
+wl = wb.create_sheet('Wash_Log')
+head(wl, ['Date', 'Hour', 'Unit', 'Machine_ID', 'Wash_Type', 'Style', 'PO', 'Color', 'Input', 'Output', 'QC_Inspected', 'Defect', 'Rewash', 'Rewash_Output', 'Reject',
+          'Downtime_Min', 'Downtime_Reason', 'Remarks', 'Recipe_Min'],
+     key_n=4, widths={'Hour': 13, 'Machine_ID': 16, 'Style': 26, 'PO': 12, 'Color': 16, 'Downtime_Reason': 24, 'Remarks': 18})
+ex = ['2026-10-08', '08:00-09:00', unit, machines_for(unit)[0]['Machine_ID'], 'Denim', 'ST-4412 Dark Stone', 'PO-0001', 'Dark Blue', 120, 110, 90, 2, 1, 0, 0, '', '', 'EXAMPLE - delete me', 95]
+for j, v in enumerate(ex, 1):
+    c = wl.cell(2, j, v); c.font = F(c='888888' if j <= 4 else '0000FF')
+    if j <= 4: c.fill = fill(KEY)
+listval(wl, '=Lists!$B$2:$B$10', f'E2:E{LAST}', True)
+listval(wl, '=Order_Master!$C$2:$C$2000', f'F2:F{LAST}', False)
+listval(wl, '=Order_Master!$D$2:$D$2000', f'G2:G{LAST}', False)
+listval(wl, '=Order_Master!$E$2:$E$2000', f'H2:H{LAST}', False)
+listval(wl, '=Lists!$C$2:$C$12', f'Q2:Q{LAST}', True)
+numval(wl, f'I2:P{LAST}')
+listval(cl, f'=Master_Machine!$B$2:$B${len(machines_for(unit)) + 1}', 'B2:B40000', True)
+listval(cl, '=Order_Master!$T$2:$T$2000', 'C2:C40000', False)
+numval(cl, 'D2:D40000'); numval(cl, 'G2:I40000')
+
+dl = wb.create_sheet('Dry_Log')
+head(dl, ['Date', 'Hour', 'Unit', 'Process', 'Style', 'PO', 'Color', 'Input', 'Output', 'Defect', 'Rework', 'Downtime_Min', 'Downtime_Reason', 'Remarks'],
+     key_n=4, widths={'Hour': 13, 'Process': 28, 'Style': 26, 'PO': 12, 'Color': 16, 'Downtime_Reason': 24, 'Remarks': 18})
+ex = ['2026-10-08', '08:00-09:00', unit, processes_for(unit)[2]['Process'] if processes_for(unit) else 'Pattern Whisker', 'ST-4412 Dark Stone', 'PO-0001', 'Dark Blue', 900, 880, 15, 8, '', '', 'EXAMPLE - delete me']
+for j, v in enumerate(ex, 1):
+    c = dl.cell(2, j, v); c.font = F(c='888888' if j <= 4 else '0000FF')
+    if j <= 4: c.fill = fill(KEY)
+listval(dl, '=Order_Master!$C$2:$C$2000', f'E2:E{LAST}', False)
+listval(dl, '=Order_Master!$D$2:$D$2000', f'F2:F{LAST}', False)
+listval(dl, '=Order_Master!$E$2:$E$2000', f'G2:G{LAST}', False)
+listval(dl, '=Lists!$D$2:$D$10', f'M2:M{LAST}', True)
+numval(dl, f'H2:L{LAST}')
+
+dpn = wb.create_sheet('Daily_Plan')
+head(dpn, ['Date', 'Wash_Plant', 'Style', 'PO', 'Color', 'Plan_Input', 'Plan_Output'], key_n=5, widths={'Style': 26, 'PO': 12, 'Color': 16})
+dpn['I1'] = 'Optional. One row per date per order: how many pcs you PLAN to input and to output that day. Orders listed here override the straight-line plan from Order_Master. Dates as yyyy-mm-dd.'
+dpn['I1'].font = F(s=9, c='666666'); dpn.column_dimensions['I'].width = 90
+for r_ in range(2, 5001): dpn.cell(r_, 1).number_format = 'yyyy-mm-dd'
+
+wp = wb.create_sheet('WIP_Log'); head(wp, ['Date', 'Unit', 'Stage', 'Opening_WIP', 'Remarks'], widths={'Stage': 28, 'Remarks': 30})
+for j, v in enumerate(['2026-10-08', unit, 'WASH', 100000, 'EXAMPLE - delete me'], 1): wp.cell(2, j, v).font = F(c='0000FF')
+d3 = DataValidation(type='list', formula1='=Lists!$E$2:$E$30', allow_blank=True, showErrorMessage=False); wp.add_data_validation(d3); d3.add('C3:C5000')
+for ws in (wl, dl, wp): ws.column_dimensions['A'].width = 12
+# ---- Unit master and allotment (new)
+um = wb.create_sheet('Unit_Master'); head(um, ['Wash_Plant', 'Wet_Capacity_Day', 'Dry_Capacity_Day'], key_n=1, widths={'Wet_Capacity_Day': 20, 'Dry_Capacity_Day': 20})
+u_ = CFG['units'][unit]
+for j, v in enumerate([unit, u_['wash_cap_day'], u_['dry_cap_day']], 1):
+    c = um.cell(2, j, v); c.font = F(c='0000FF' if j > 1 else '222222')
+    if j > 1: c.fill = fill(INP)
+um['E1'] = 'Plant total capacity in pcs per day (wet = wash, dry = dry process total, no breakdown). Shown on the dashboard Overview.'
+um['E1'].font = F(s=9, c='666666'); um.column_dimensions['E'].width = 90
+al = wb.create_sheet('Allotment'); head(al, ['Date', 'Unit', 'Resource', 'Style', 'PO', 'Color', 'Plan_Qty'], key_n=3, widths={'Resource': 24, 'Style': 26, 'PO': 12, 'Color': 16})
+al['I1'] = 'Optional. Plan pcs ALLOTTED to a machine (Machine_ID) or dry process (Process name) for a date and order. Used by the Capacity page (allotted plan vs capacity vs actual). If empty, the dashboard derives it from the hours the resource ran a style.'
+al['I1'].font = F(s=9, c='666666'); al.column_dimensions['I'].width = 90
+for r_ in range(2, 20001): al.cell(r_, 1).number_format = 'yyyy-mm-dd'
+wb.save(out); print('saved', out)
