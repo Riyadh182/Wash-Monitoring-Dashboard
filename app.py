@@ -43,20 +43,29 @@ def cached_pdaily(_D, version, d0, d1):
     return calc.all_plant_daily(_D['wash'], _D['wip'], _D['units'], d0, d1)
 
 
+def _naive_dt(s):
+    """Any column (object, empty, tz-aware, mixed) -> tz-naive datetime64, so date arithmetic never raises TypeError."""
+    return pd.to_datetime(s, errors='coerce', utc=True).dt.tz_localize(None)
+
+
 def order_frame(D, day):
-    """Buyer / Sewing unit / effective CRD of every order (hourly Order_Master and Plan_Board), used only to fill the sidebar filters."""
+    """Buyer / Sewing unit / effective CRD of every order (hourly Order_Master and Plan_Board), used only to fill the sidebar filters.
+    Safe when no orders are loaded yet (hourly-only sheets): returns an empty frame with proper datetime dtype."""
     parts = []
     o = D['order']
     if len(o):
-        crd = pd.to_datetime(o['Updated_CRD'], errors='coerce').where(pd.to_datetime(o['Updated_CRD'], errors='coerce').notna(), pd.to_datetime(o['CRD'], errors='coerce'))
+        crd = _naive_dt(o['Updated_CRD'])
+        crd = crd.where(crd.notna(), _naive_dt(o['CRD']))
         parts.append(pd.DataFrame({'Buyer': o['Buyer'], 'Sewing_Unit': o['Sewing_Unit'], 'Eff_CRD': crd}))
     b = D['board_orders']
     if len(b):
-        crd = pd.to_datetime(b['Revised_CRD'], errors='coerce').where(pd.to_datetime(b['Revised_CRD'], errors='coerce').notna(), pd.to_datetime(b['CRD'], errors='coerce'))
+        crd = _naive_dt(b['Revised_CRD'])
+        crd = crd.where(crd.notna(), _naive_dt(b['CRD']))
         parts.append(pd.DataFrame({'Buyer': b['Buyer'], 'Sewing_Unit': b['Sewing_Unit'], 'Eff_CRD': crd}))
-    F = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame(columns=['Buyer', 'Sewing_Unit', 'Eff_CRD'])
+    F = pd.concat(parts, ignore_index=True) if parts else pd.DataFrame({'Buyer': pd.Series(dtype=str), 'Sewing_Unit': pd.Series(dtype=str), 'Eff_CRD': pd.Series(dtype='datetime64[ns]')})
+    F['Eff_CRD'] = _naive_dt(F['Eff_CRD'])
     F['Buyer'], F['Sewing_Unit'] = F['Buyer'].fillna('').astype(str), F['Sewing_Unit'].fillna('').astype(str)
-    F['Days_to_CRD'] = (F['Eff_CRD'] - pd.Timestamp(day)).dt.days
+    F['Days_to_CRD'] = (F['Eff_CRD'] - pd.Timestamp(day).normalize()).dt.days
     F['Balance'] = 1.0
     return F
 
@@ -169,6 +178,9 @@ X.dp = calc.order_daily_plan(D['order'], D['plan'], unit, S['Output_Lag_Days'])
 X.H = None
 
 view = st.radio('Section', NAV, horizontal=True, label_visibility='collapsed', key='nav')
+if not len(D['order']) and not len(D['board_orders']):
+    st.info('No orders loaded yet (Order_Master / Plan_Board are empty), so order pages (Plan Execution, PO Tracker, CRD Crisis, Daily Board) have nothing to show. '
+            'Hourly Monitor, Machines, Dry Process, Capacity, Quality & Downtime and Trends work from the hourly logs: pick them in the Section row above.')
 if overall and view in PLANT_PAGES:
     st.info(f'Overall is selected, so this plant page shows {unit}. Pick a wash plant in the sidebar to change it.')
 
